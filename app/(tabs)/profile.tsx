@@ -13,10 +13,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import ViewShot from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { router } from 'expo-router';
 import { Colors, Fonts } from '@/constants/theme';
-import { useStore } from '@/store';
+import { useStore, MoveProof } from '@/store';
 import { useIsPremium } from '@/hooks/useIsPremium';
 import { restorePurchases, purchaseStreakFreeze } from '@/utils/revenueCat';
+import { Image } from 'react-native';
 
 const { width } = Dimensions.get('window');
 
@@ -62,6 +65,7 @@ export default function ProfileTab() {
     updateSettings,
     resetAll,
     addFreeze,
+    proofHistory,
   } = useStore();
 
   const handleRestorePurchases = async () => {
@@ -141,6 +145,33 @@ export default function ProfileTab() {
           text: 'Reset',
           style: 'destructive',
           onPress: () => resetAll(),
+        },
+      ]
+    );
+  };
+
+  const handleResetApp = () => {
+    Alert.alert(
+      'Reset App',
+      'Reset all data? This will restart from onboarding.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Reset',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              // Clear all AsyncStorage data
+              await AsyncStorage.clear();
+              // Reset Zustand store to defaults
+              resetAll();
+              // Navigate to onboarding screen 1
+              router.replace('/(onboarding)/hook');
+            } catch (error) {
+              console.error('Error resetting app:', error);
+              Alert.alert('Error', 'Failed to reset app. Please try again.');
+            }
+          },
         },
       ]
     );
@@ -286,6 +317,72 @@ export default function ProfileTab() {
             </Text>
           </LinearGradient>
         </TouchableOpacity>
+
+        {/* Proof History */}
+        {proofHistory && proofHistory.length > 0 && (
+          <>
+            <Text style={[styles.sectionTitle, { marginTop: 32 }]}>
+              Proof History
+            </Text>
+            <Text style={styles.sectionSubtitle}>
+              Your verified moves
+            </Text>
+
+            <View style={styles.proofHistoryContainer}>
+              {proofHistory.slice(0, 10).map((proof: MoveProof) => (
+                <View key={proof.id} style={styles.proofCard}>
+                  <View style={styles.proofHeader}>
+                    <View style={styles.proofBadge}>
+                      <Text style={styles.proofBadgeText}>
+                        {proof.moveType === 'quick' ? '⚡' : proof.moveType === 'power' ? '🔥' : '👑'}
+                        {' '}
+                        {proof.moveType === 'quick' ? 'Quick' : proof.moveType === 'power' ? 'Power' : 'Boss'}
+                      </Text>
+                    </View>
+                    {proof.aiVerified && (
+                      <View style={styles.aiVerifiedBadge}>
+                        <Text style={styles.aiVerifiedText}>
+                          {proof.verifiedOffline ? '⚡ Offline' : '✅ AI Verified'}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+
+                  <Text style={styles.proofTitle}>{proof.moveTitle}</Text>
+
+                  {proof.proofPhoto && (
+                    <Image
+                      source={{ uri: proof.proofPhoto }}
+                      style={styles.proofImage}
+                      resizeMode="cover"
+                    />
+                  )}
+
+                  {proof.proofText && (
+                    <Text style={styles.proofText} numberOfLines={3}>
+                      "{proof.proofText}"
+                    </Text>
+                  )}
+
+                  {proof.aiMessage && !proof.verifiedOffline && (
+                    <Text style={styles.aiMessage}>
+                      🤖 {proof.aiMessage}
+                    </Text>
+                  )}
+
+                  <Text style={styles.proofDate}>
+                    {new Date(proof.completedAt).toLocaleDateString('en-US', {
+                      month: 'short',
+                      day: 'numeric',
+                      hour: 'numeric',
+                      minute: '2-digit',
+                    })}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          </>
+        )}
 
         {/* All Milestones */}
         <Text style={[styles.sectionTitle, { marginTop: 32 }]}>
@@ -453,6 +550,15 @@ export default function ProfileTab() {
 
         {/* Version */}
         <Text style={styles.versionText}>Delusional Leap v1.0.0</Text>
+
+        {/* Reset App Button */}
+        <TouchableOpacity
+          style={styles.resetAppButton}
+          onPress={handleResetApp}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.resetAppButtonText}>Reset App</Text>
+        </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
   );
@@ -833,5 +939,87 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.sora.medium,
     fontSize: 14,
     color: 'rgba(255, 251, 245, 0.7)',
+  },
+  proofHistoryContainer: {
+    marginTop: 16,
+    gap: 12,
+  },
+  proofCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  proofHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  proofBadge: {
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  proofBadgeText: {
+    fontFamily: Fonts.sora.medium,
+    fontSize: 12,
+    color: Colors.cream,
+  },
+  aiVerifiedBadge: {
+    backgroundColor: 'rgba(94, 234, 212, 0.15)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(94, 234, 212, 0.3)',
+  },
+  aiVerifiedText: {
+    fontFamily: Fonts.sora.medium,
+    fontSize: 11,
+    color: Colors.skyTeal,
+  },
+  proofTitle: {
+    fontFamily: Fonts.fraunces.semiBold,
+    fontSize: 16,
+    color: Colors.cream,
+    marginBottom: 8,
+  },
+  proofImage: {
+    width: '100%',
+    height: 150,
+    borderRadius: 12,
+    marginBottom: 12,
+  },
+  proofText: {
+    fontFamily: Fonts.sora.regular,
+    fontSize: 14,
+    color: 'rgba(255, 251, 245, 0.8)',
+    fontStyle: 'italic',
+    marginBottom: 8,
+    lineHeight: 20,
+  },
+  aiMessage: {
+    fontFamily: Fonts.sora.regular,
+    fontSize: 13,
+    color: Colors.skyTeal,
+    marginBottom: 8,
+  },
+  proofDate: {
+    fontFamily: Fonts.sora.regular,
+    fontSize: 11,
+    color: 'rgba(255, 251, 245, 0.4)',
+  },
+  resetAppButton: {
+    marginTop: 16,
+    padding: 12,
+    alignItems: 'center',
+  },
+  resetAppButtonText: {
+    fontFamily: Fonts.sora.regular,
+    fontSize: 12,
+    color: '#FF4444',
   },
 });

@@ -4,6 +4,7 @@ export type {
   Dream,
   Move,
   DailyMove,
+  MoveProof,
   Streaks,
   Settings,
   VisionBoard,

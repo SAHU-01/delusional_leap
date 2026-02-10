@@ -31,7 +31,14 @@
     },
     "plugins": [
       "expo-router",
-      "expo-font"
+      "expo-font",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow $(PRODUCT_NAME) to access your photos for move verification.",
+          "cameraPermission": "Allow $(PRODUCT_NAME) to access your camera to take proof photos."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

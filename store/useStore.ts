@@ -27,6 +27,21 @@ export interface Dream {
   moves: string[];
 }
 
+export interface MoveProof {
+  id: string;
+  moveId: string;
+  moveTitle: string;
+  moveType: 'quick' | 'power' | 'boss';
+  proofType: 'text' | 'photo' | 'ai_verified';
+  proofText?: string;
+  proofPhoto?: string; // base64 thumbnail
+  aiVerified?: boolean;
+  aiMessage?: string;
+  verifiedOffline?: boolean;
+  completedAt: string;
+  date: string;
+}
+
 export interface DailyMove {
   id: string;
   type: 'quick' | 'power' | 'boss';
@@ -79,6 +94,7 @@ interface AppState {
   visionBoard: VisionBoard;
   dailyMovesCompletedToday: number;
   lastDailyMovesDate: string | null;
+  proofHistory: MoveProof[];
 
   // User actions
   setUser: (user: Partial<User>) => void;
@@ -105,6 +121,10 @@ interface AppState {
   addMove: (move: Move) => void;
   updateMove: (id: string, move: Partial<Move>) => void;
   deleteMove: (id: string) => void;
+
+  // Proof actions
+  addProof: (proof: MoveProof) => void;
+  getProofHistory: () => MoveProof[];
 
   // Streak actions
   updateStreaks: (streaks: Partial<Streaks>) => void;
@@ -312,6 +332,7 @@ export const useStore = create<AppState>()(
       visionBoard: initialVisionBoard,
       dailyMovesCompletedToday: 0,
       lastDailyMovesDate: null,
+      proofHistory: [],
 
       // User actions
       setUser: (userData) =>
@@ -444,6 +465,16 @@ export const useStore = create<AppState>()(
           moves: state.moves.filter((m) => m.id !== id),
         })),
 
+      // Proof actions
+      addProof: (proof) =>
+        set((state) => ({
+          proofHistory: [proof, ...state.proofHistory],
+        })),
+      getProofHistory: () => {
+        const state = get();
+        return state.proofHistory;
+      },
+
       // Streak actions
       updateStreaks: (streakData) =>
         set((state) => ({
@@ -548,6 +579,7 @@ export const useStore = create<AppState>()(
           visionBoard: initialVisionBoard,
           dailyMovesCompletedToday: 0,
           lastDailyMovesDate: null,
+          proofHistory: [],
         }),
     }),
     {

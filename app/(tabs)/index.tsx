@@ -26,9 +26,11 @@ import Animated, {
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Colors, Fonts } from '@/constants/theme';
-import { useStore } from '@/store';
+import { useStore, MoveProof } from '@/store';
 import { useIsPremium } from '@/hooks/useIsPremium';
 import { presentPaywall } from '@/utils/revenueCat';
+import VerificationModal from '@/components/VerificationModal';
+import CustomPaywall from '@/components/CustomPaywall';
 
 const { width, height } = Dimensions.get('window');
 const CARD_WIDTH = width * 0.72;
@@ -591,6 +593,9 @@ export default function TodayTab() {
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [quote, setQuote] = useState(GABBY_QUOTES[0]);
   const [showingPaywall, setShowingPaywall] = useState(false);
+  const [showCustomPaywall, setShowCustomPaywall] = useState(false);
+  const [showVerificationModal, setShowVerificationModal] = useState(false);
+  const [moveToVerify, setMoveToVerify] = useState<DailyMove | null>(null);
 
   const { isPremium, loading: premiumLoading } = useIsPremium();
 
@@ -603,6 +608,7 @@ export default function TodayTab() {
     settings,
     activeDream,
     totalMovesCompleted,
+    addProof,
   } = useStore();
 
   // Get today's completed moves count for paywall trigger
@@ -627,6 +633,13 @@ export default function TodayTab() {
   const incompleteMoves = todayMoves.filter((m) => !m.completed);
   const allCompleted = todayMoves.length > 0 && incompleteMoves.length === 0;
 
+  // Debug logging for paywall state
+  console.log('=== TODAY TAB RENDER ===');
+  console.log('todayCompletedCount:', todayCompletedCount);
+  console.log('allCompleted:', allCompleted);
+  console.log('showCustomPaywall:', showCustomPaywall);
+  console.log('isPremium:', isPremium);
+
   const totalPointsEarned = todayMoves
     .filter((m) => m.completed)
     .reduce((sum, m) => sum + (m.points || 0), 0);
@@ -648,103 +661,110 @@ export default function TodayTab() {
   }, [settings.haptics, incompleteMoves.length]);
 
   // Show paywall after completing 3rd move (moment of delight)
-  const triggerPaywallIfNeeded = useCallback(async (newCompletedCount: number) => {
+  const triggerPaywallIfNeeded = useCallback((newCompletedCount: number) => {
+    const shouldShowPaywall = !isPremium && newCompletedCount >= FREE_MOVES_PER_DAY;
+    console.log(`Move completed. Total today: ${newCompletedCount}. Should show paywall: ${shouldShowPaywall}`);
+    console.log(`isPremium: ${isPremium}, FREE_MOVES_PER_DAY: ${FREE_MOVES_PER_DAY}`);
+
     // Only show paywall for free users after 3rd move
-    if (!isPremium && newCompletedCount === FREE_MOVES_PER_DAY) {
+    if (shouldShowPaywall) {
+      console.log('Triggering paywall - setting showingPaywall to true');
       setShowingPaywall(true);
-      // Small delay to let confetti play, then show paywall
-      setTimeout(async () => {
-        await presentPaywall();
+      // Small delay to let confetti play, then show custom paywall
+      setTimeout(() => {
+        console.log('Timeout fired - setting showCustomPaywall to true');
+        setShowCustomPaywall(true);
         setShowingPaywall(false);
       }, 1500);
     }
   }, [isPremium]);
 
-  // Complete the center card
+  // Handle paywall close - show celebration screen
+  const handlePaywallClose = useCallback(() => {
+    setShowCustomPaywall(false);
+  }, []);
+
+  // Open verification modal for the center card
   const handleSwipeUp = useCallback((id: string) => {
     // Check if free user is trying to exceed limit
     if (!isPremium && todayCompletedCount >= FREE_MOVES_PER_DAY) {
       if (settings.haptics) {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
       }
-      Alert.alert(
-        "You're on fire! 🔥",
-        "Unlock unlimited Moves to keep your momentum going!",
-        [
-          { text: 'Maybe Later', style: 'cancel' },
-          {
-            text: 'Unlock Pro',
-            onPress: async () => {
-              await presentPaywall();
-            },
-          },
-        ]
-      );
+      // Show custom paywall directly
+      setShowCustomPaywall(true);
       return;
     }
 
-    if (settings.haptics) {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    // Find the move and show verification modal
+    const move = incompleteMoves.find((m) => m.id === id);
+    if (move) {
+      setMoveToVerify(move);
+      setShowVerificationModal(true);
     }
-    confettiRef.current?.start();
+  }, [settings.haptics, incompleteMoves, isPremium, todayCompletedCount]);
 
-    const newCompletedCount = todayCompletedCount + 1;
-
-    // Complete after a short delay for animation
-    setTimeout(() => {
-      completeDailyMove(id);
-      // Reset focus if needed
-      const remaining = incompleteMoves.filter((m) => m.id !== id);
-      if (remaining.length > 0 && focusedIndex >= remaining.length) {
-        setFocusedIndex(0);
-      }
-
-      // Trigger paywall after 3rd move completion
-      triggerPaywallIfNeeded(newCompletedCount);
-    }, 100);
-  }, [settings.haptics, completeDailyMove, incompleteMoves, focusedIndex, isPremium, todayCompletedCount, triggerPaywallIfNeeded]);
-
-  // Complete via button press
+  // Complete via button press - opens verification modal
   const handleCompletePress = useCallback((id: string) => {
     // Check if free user is trying to exceed limit
     if (!isPremium && todayCompletedCount >= FREE_MOVES_PER_DAY) {
       if (settings.haptics) {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
       }
-      Alert.alert(
-        "You're on fire! 🔥",
-        "Unlock unlimited Moves to keep your momentum going!",
-        [
-          { text: 'Maybe Later', style: 'cancel' },
-          {
-            text: 'Unlock Pro',
-            onPress: async () => {
-              await presentPaywall();
-            },
-          },
-        ]
-      );
+      // Show custom paywall directly
+      setShowCustomPaywall(true);
       return;
     }
 
+    // Find the move and show verification modal
+    const move = incompleteMoves.find((m) => m.id === id);
+    if (move) {
+      setMoveToVerify(move);
+      setShowVerificationModal(true);
+    }
+  }, [settings.haptics, incompleteMoves, isPremium, todayCompletedCount]);
+
+  // Handle verification complete callback
+  const handleVerificationComplete = useCallback((proof: Omit<MoveProof, 'id' | 'completedAt' | 'date'>) => {
+    console.log('=== VERIFICATION COMPLETE ===');
+    console.log('Current todayCompletedCount:', todayCompletedCount);
+
+    setShowVerificationModal(false);
+
+    if (!moveToVerify) return;
+
+    // Trigger haptic and confetti
     if (settings.haptics) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     }
     confettiRef.current?.start();
 
     const newCompletedCount = todayCompletedCount + 1;
+    console.log('New completed count will be:', newCompletedCount);
 
+    // Save proof to history
+    const fullProof: MoveProof = {
+      ...proof,
+      id: `proof-${Date.now()}`,
+      completedAt: new Date().toISOString(),
+      date: new Date().toISOString().split('T')[0],
+    };
+    addProof(fullProof);
+
+    // Complete the move after a short delay for animation
     setTimeout(() => {
-      completeDailyMove(id);
-      const remaining = incompleteMoves.filter((m) => m.id !== id);
+      completeDailyMove(moveToVerify.id);
+      // Reset focus if needed
+      const remaining = incompleteMoves.filter((m) => m.id !== moveToVerify.id);
       if (remaining.length > 0 && focusedIndex >= remaining.length) {
         setFocusedIndex(0);
       }
+      setMoveToVerify(null);
 
       // Trigger paywall after 3rd move completion
       triggerPaywallIfNeeded(newCompletedCount);
     }, 100);
-  }, [settings.haptics, completeDailyMove, incompleteMoves, focusedIndex, isPremium, todayCompletedCount, triggerPaywallIfNeeded]);
+  }, [settings.haptics, completeDailyMove, incompleteMoves, focusedIndex, todayCompletedCount, triggerPaywallIfNeeded, moveToVerify, addProof]);
 
   const handleHaptic = useCallback(() => {
     if (settings.haptics) {
@@ -753,6 +773,7 @@ export default function TodayTab() {
   }, [settings.haptics]);
 
   // If all completed, show ONLY celebration view (no header, no streak banner)
+  // BUT still render CustomPaywall so it can appear on top after 3rd move!
   if (allCompleted) {
     return (
       <GestureHandlerRootView style={styles.container}>
@@ -763,6 +784,13 @@ export default function TodayTab() {
             totalMovesCompleted={totalMovesCompleted}
             dreamTitle={activeDream?.title || null}
             onHaptic={handleHaptic}
+          />
+
+          {/* Custom Paywall Modal - rendered here too for 3rd move completion */}
+          <CustomPaywall
+            visible={showCustomPaywall}
+            onClose={handlePaywallClose}
+            hapticEnabled={settings.haptics}
           />
         </SafeAreaView>
       </GestureHandlerRootView>
@@ -828,6 +856,25 @@ export default function TodayTab() {
             <Text style={styles.quoteAuthor}>— Gabby</Text>
           </View>
         </View>
+
+        {/* Verification Modal */}
+        <VerificationModal
+          visible={showVerificationModal}
+          move={moveToVerify}
+          onClose={() => {
+            setShowVerificationModal(false);
+            setMoveToVerify(null);
+          }}
+          onComplete={handleVerificationComplete}
+          hapticEnabled={settings.haptics}
+        />
+
+        {/* Custom Paywall Modal */}
+        <CustomPaywall
+          visible={showCustomPaywall}
+          onClose={handlePaywallClose}
+          hapticEnabled={settings.haptics}
+        />
       </SafeAreaView>
     </GestureHandlerRootView>
   );
