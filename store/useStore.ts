@@ -110,6 +110,7 @@ interface AppState {
   updateStreaks: (streaks: Partial<Streaks>) => void;
   incrementStreak: () => void;
   useFreeze: () => void;
+  addFreeze: (count?: number) => void;
   checkAndUpdateStreak: () => void;
 
   // Vision Board actions
@@ -461,6 +462,13 @@ export const useStore = create<AppState>()(
           streaks: {
             ...state.streaks,
             freezes: Math.max(0, state.streaks.freezes - 1),
+          },
+        })),
+      addFreeze: (count = 1) =>
+        set((state) => ({
+          streaks: {
+            ...state.streaks,
+            freezes: state.streaks.freezes + count,
           },
         })),
       checkAndUpdateStreak: () => {

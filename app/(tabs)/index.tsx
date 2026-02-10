@@ -27,6 +27,8 @@ import Animated, {
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Colors, Fonts } from '@/constants/theme';
 import { useStore } from '@/store';
+import { useIsPremium } from '@/hooks/useIsPremium';
+import { presentPaywall } from '@/utils/revenueCat';
 
 const { width, height } = Dimensions.get('window');
 const CARD_WIDTH = width * 0.72;
@@ -582,10 +584,15 @@ const StreakBanner: React.FC<{ streakCount: number }> = ({ streakCount }) => {
   );
 };
 
+const FREE_MOVES_PER_DAY = 3;
+
 export default function TodayTab() {
   const confettiRef = useRef<ConfettiCannon>(null);
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [quote, setQuote] = useState(GABBY_QUOTES[0]);
+  const [showingPaywall, setShowingPaywall] = useState(false);
+
+  const { isPremium, loading: premiumLoading } = useIsPremium();
 
   const {
     dailyMoves,
@@ -597,6 +604,12 @@ export default function TodayTab() {
     activeDream,
     totalMovesCompleted,
   } = useStore();
+
+  // Get today's completed moves count for paywall trigger
+  const todayString = new Date().toISOString().split('T')[0];
+  const todayCompletedCount = dailyMoves.filter(
+    (m) => m.date === todayString && m.completed
+  ).length;
 
   useEffect(() => {
     generateDailyMoves();
@@ -634,12 +647,48 @@ export default function TodayTab() {
     setFocusedIndex((prev) => (prev - 1 + incompleteMoves.length) % incompleteMoves.length);
   }, [settings.haptics, incompleteMoves.length]);
 
+  // Show paywall after completing 3rd move (moment of delight)
+  const triggerPaywallIfNeeded = useCallback(async (newCompletedCount: number) => {
+    // Only show paywall for free users after 3rd move
+    if (!isPremium && newCompletedCount === FREE_MOVES_PER_DAY) {
+      setShowingPaywall(true);
+      // Small delay to let confetti play, then show paywall
+      setTimeout(async () => {
+        await presentPaywall();
+        setShowingPaywall(false);
+      }, 1500);
+    }
+  }, [isPremium]);
+
   // Complete the center card
   const handleSwipeUp = useCallback((id: string) => {
+    // Check if free user is trying to exceed limit
+    if (!isPremium && todayCompletedCount >= FREE_MOVES_PER_DAY) {
+      if (settings.haptics) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      }
+      Alert.alert(
+        "You're on fire! 🔥",
+        "Unlock unlimited Moves to keep your momentum going!",
+        [
+          { text: 'Maybe Later', style: 'cancel' },
+          {
+            text: 'Unlock Pro',
+            onPress: async () => {
+              await presentPaywall();
+            },
+          },
+        ]
+      );
+      return;
+    }
+
     if (settings.haptics) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     }
     confettiRef.current?.start();
+
+    const newCompletedCount = todayCompletedCount + 1;
 
     // Complete after a short delay for animation
     setTimeout(() => {
@@ -649,15 +698,41 @@ export default function TodayTab() {
       if (remaining.length > 0 && focusedIndex >= remaining.length) {
         setFocusedIndex(0);
       }
+
+      // Trigger paywall after 3rd move completion
+      triggerPaywallIfNeeded(newCompletedCount);
     }, 100);
-  }, [settings.haptics, completeDailyMove, incompleteMoves, focusedIndex]);
+  }, [settings.haptics, completeDailyMove, incompleteMoves, focusedIndex, isPremium, todayCompletedCount, triggerPaywallIfNeeded]);
 
   // Complete via button press
   const handleCompletePress = useCallback((id: string) => {
+    // Check if free user is trying to exceed limit
+    if (!isPremium && todayCompletedCount >= FREE_MOVES_PER_DAY) {
+      if (settings.haptics) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      }
+      Alert.alert(
+        "You're on fire! 🔥",
+        "Unlock unlimited Moves to keep your momentum going!",
+        [
+          { text: 'Maybe Later', style: 'cancel' },
+          {
+            text: 'Unlock Pro',
+            onPress: async () => {
+              await presentPaywall();
+            },
+          },
+        ]
+      );
+      return;
+    }
+
     if (settings.haptics) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     }
     confettiRef.current?.start();
+
+    const newCompletedCount = todayCompletedCount + 1;
 
     setTimeout(() => {
       completeDailyMove(id);
@@ -665,8 +740,11 @@ export default function TodayTab() {
       if (remaining.length > 0 && focusedIndex >= remaining.length) {
         setFocusedIndex(0);
       }
+
+      // Trigger paywall after 3rd move completion
+      triggerPaywallIfNeeded(newCompletedCount);
     }, 100);
-  }, [settings.haptics, completeDailyMove, incompleteMoves, focusedIndex]);
+  }, [settings.haptics, completeDailyMove, incompleteMoves, focusedIndex, isPremium, todayCompletedCount, triggerPaywallIfNeeded]);
 
   const handleHaptic = useCallback(() => {
     if (settings.haptics) {

@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   Dimensions,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -14,6 +15,8 @@ import ViewShot from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
 import { Colors, Fonts } from '@/constants/theme';
 import { useStore } from '@/store';
+import { useIsPremium } from '@/hooks/useIsPremium';
+import { restorePurchases, purchaseStreakFreeze } from '@/utils/revenueCat';
 
 const { width } = Dimensions.get('window');
 
@@ -45,6 +48,10 @@ const getNextMilestone = (movesCount: number) => {
 export default function ProfileTab() {
   const viewShotRef = useRef<ViewShot>(null);
   const [isSharing, setIsSharing] = useState(false);
+  const [isRestoring, setIsRestoring] = useState(false);
+  const [isPurchasingFreeze, setIsPurchasingFreeze] = useState(false);
+
+  const { isPremium, loading: premiumLoading, refresh: refreshPremium } = useIsPremium();
 
   const {
     user,
@@ -54,7 +61,43 @@ export default function ProfileTab() {
     settings,
     updateSettings,
     resetAll,
+    addFreeze,
   } = useStore();
+
+  const handleRestorePurchases = async () => {
+    setIsRestoring(true);
+    try {
+      const result = await restorePurchases();
+      Alert.alert(
+        result.isPremium ? 'Restored!' : 'Restore Complete',
+        result.message
+      );
+      if (result.isPremium) {
+        refreshPremium();
+      }
+    } catch (error) {
+      Alert.alert('Error', 'Failed to restore purchases. Please try again.');
+    } finally {
+      setIsRestoring(false);
+    }
+  };
+
+  const handleBuyStreakFreeze = async () => {
+    setIsPurchasingFreeze(true);
+    try {
+      const result = await purchaseStreakFreeze();
+      if (result.success) {
+        addFreeze(1);
+        Alert.alert('Success!', result.message);
+      } else if (result.message !== 'Purchase cancelled.') {
+        Alert.alert('Oops', result.message);
+      }
+    } catch (error) {
+      Alert.alert('Error', 'Failed to purchase Streak Freeze. Please try again.');
+    } finally {
+      setIsPurchasingFreeze(false);
+    }
+  };
 
   const currentMilestone = getMilestone(totalMovesCompleted);
   const nextMilestone = getNextMilestone(totalMovesCompleted);
@@ -281,6 +324,74 @@ export default function ProfileTab() {
             );
           })}
         </View>
+
+        {/* Premium Section */}
+        <Text style={[styles.sectionTitle, { marginTop: 32 }]}>Subscription</Text>
+
+        {premiumLoading ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator color={Colors.hibiscus} />
+          </View>
+        ) : isPremium ? (
+          <View style={styles.premiumBadge}>
+            <LinearGradient
+              colors={[Colors.hibiscus, Colors.sunset]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={styles.premiumGradient}
+            >
+              <Text style={styles.premiumText}>Pro Member</Text>
+            </LinearGradient>
+          </View>
+        ) : (
+          <View style={styles.freeUserCard}>
+            <Text style={styles.freeUserText}>
+              Free tier: 3 Moves/day
+            </Text>
+            <Text style={styles.freeUserSubtext}>
+              Upgrade to Pro for unlimited Moves!
+            </Text>
+          </View>
+        )}
+
+        {/* Streak Freeze Purchase */}
+        <TouchableOpacity
+          style={styles.streakFreezeButton}
+          onPress={handleBuyStreakFreeze}
+          disabled={isPurchasingFreeze}
+          activeOpacity={0.8}
+        >
+          <View style={styles.streakFreezeContent}>
+            <View style={styles.streakFreezeLeft}>
+              <Text style={styles.streakFreezeEmoji}>🧊</Text>
+              <View>
+                <Text style={styles.streakFreezeTitle}>Buy Streak Freeze</Text>
+                <Text style={styles.streakFreezePrice}>$0.99 · Protects your streak for 1 day</Text>
+              </View>
+            </View>
+            {isPurchasingFreeze ? (
+              <ActivityIndicator color={Colors.skyTeal} size="small" />
+            ) : (
+              <Text style={styles.streakFreezeCount}>
+                {streaks.freezes} owned
+              </Text>
+            )}
+          </View>
+        </TouchableOpacity>
+
+        {/* Restore Purchases */}
+        <TouchableOpacity
+          style={styles.restoreButton}
+          onPress={handleRestorePurchases}
+          disabled={isRestoring}
+          activeOpacity={0.8}
+        >
+          {isRestoring ? (
+            <ActivityIndicator color={Colors.cream} size="small" />
+          ) : (
+            <Text style={styles.restoreButtonText}>Restore Purchases</Text>
+          )}
+        </TouchableOpacity>
 
         {/* Settings Section */}
         <Text style={[styles.sectionTitle, { marginTop: 32 }]}>Settings</Text>
@@ -635,5 +746,92 @@ const styles = StyleSheet.create({
     color: 'rgba(255, 251, 245, 0.3)',
     textAlign: 'center',
     marginTop: 24,
+  },
+  loadingContainer: {
+    padding: 20,
+    alignItems: 'center',
+  },
+  premiumBadge: {
+    borderRadius: 12,
+    overflow: 'hidden',
+    marginTop: 12,
+    marginBottom: 16,
+  },
+  premiumGradient: {
+    paddingVertical: 16,
+    paddingHorizontal: 24,
+    alignItems: 'center',
+  },
+  premiumText: {
+    fontFamily: Fonts.sora.bold,
+    fontSize: 18,
+    color: Colors.cream,
+  },
+  freeUserCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 12,
+    padding: 16,
+    marginTop: 12,
+    marginBottom: 16,
+  },
+  freeUserText: {
+    fontFamily: Fonts.sora.medium,
+    fontSize: 16,
+    color: Colors.cream,
+    marginBottom: 4,
+  },
+  freeUserSubtext: {
+    fontFamily: Fonts.sora.regular,
+    fontSize: 13,
+    color: 'rgba(255, 251, 245, 0.6)',
+  },
+  streakFreezeButton: {
+    backgroundColor: 'rgba(94, 234, 212, 0.1)',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(94, 234, 212, 0.3)',
+    marginBottom: 12,
+  },
+  streakFreezeContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 16,
+  },
+  streakFreezeLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  streakFreezeEmoji: {
+    fontSize: 28,
+    marginRight: 12,
+  },
+  streakFreezeTitle: {
+    fontFamily: Fonts.sora.semiBold,
+    fontSize: 16,
+    color: Colors.cream,
+  },
+  streakFreezePrice: {
+    fontFamily: Fonts.sora.regular,
+    fontSize: 12,
+    color: 'rgba(255, 251, 245, 0.6)',
+    marginTop: 2,
+  },
+  streakFreezeCount: {
+    fontFamily: Fonts.sora.medium,
+    fontSize: 14,
+    color: Colors.skyTeal,
+  },
+  restoreButton: {
+    paddingVertical: 14,
+    alignItems: 'center',
+    borderRadius: 12,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+  },
+  restoreButtonText: {
+    fontFamily: Fonts.sora.medium,
+    fontSize: 14,
+    color: 'rgba(255, 251, 245, 0.7)',
   },
 });
