@@ -569,13 +569,18 @@ export default function ProfileTab() {
         <Text style={styles.versionText}>Delusional Leap v1.0.0</Text>
 
         {/* Reset App Button - Dev Only */}
-        <TouchableOpacity
-          style={styles.resetAppButton}
-          onPress={handleResetApp}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.resetAppButtonText}>Reset App (Dev)</Text>
-        </TouchableOpacity>
+        {(() => {
+          const DEV_MODE = false;
+          return DEV_MODE ? (
+            <TouchableOpacity
+              style={styles.resetAppButton}
+              onPress={handleResetApp}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.resetAppButtonText}>Reset App (Dev)</Text>
+            </TouchableOpacity>
+          ) : null;
+        })()}
       </ScrollView>
     </SafeAreaView>
   );

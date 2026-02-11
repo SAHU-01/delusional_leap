@@ -1265,14 +1265,18 @@ export default function TodayTab() {
   const handleVerificationComplete = useCallback((proof: Omit<MoveProof, 'id' | 'completedAt' | 'date'>) => {
     if (!moveToVerify) return;
 
-    // Trigger haptic and confetti FIRST (before any state changes)
+    // Trigger haptic immediately
     if (settings.haptics) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     }
-    confettiRef.current?.start();
 
-    // Close modal AFTER confetti starts
+    // Close modal first
     setShowVerificationModal(false);
+
+    // Fire confetti AFTER modal closes (modal is native overlay that blocks confetti)
+    setTimeout(() => {
+      confettiRef.current?.start();
+    }, 350);
 
     const newCompletedCount = todayCompletedCount + 1;
     const moveId = moveToVerify.id;
