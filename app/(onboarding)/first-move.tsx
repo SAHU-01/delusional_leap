@@ -41,17 +41,9 @@ export default function FirstMoveScreen() {
     // Show confetti (it will autoStart when rendered)
     setShowConfetti(true);
 
-    // Log all quiz results
-    console.log('[Onboarding] Quiz Results:', {
-      dream: onboardingData.dream,
-      blocker: onboardingData.blocker,
-      pace: onboardingData.pace,
-    });
-
     // Complete onboarding after confetti animation
     setTimeout(() => {
       completeOnboarding();
-      console.log('[Onboarding] Complete! Navigating to tabs...');
       router.replace('/(tabs)');
     }, 2000);
   };

@@ -22,6 +22,7 @@ import { useColorScheme } from '@/components/useColorScheme';
 import { initializeRevenueCat } from '@/utils/revenueCat';
 import { useStore } from '@/store/useStore';
 import { Colors } from '@/constants/theme';
+import { testConnection } from '@/lib/supabase';
 
 export {
   // Catch any errors thrown by the Layout component.
@@ -49,9 +50,12 @@ export default function RootLayout() {
     ...FontAwesome.font,
   });
 
-  // Initialize RevenueCat on app start
+  // Initialize RevenueCat and test Supabase connection on app start
   useEffect(() => {
     initializeRevenueCat();
+
+    // Test Supabase connection (fire-and-forget)
+    testConnection();
   }, []);
 
   // Expo Router uses Error Boundaries to catch errors in the navigation tree.

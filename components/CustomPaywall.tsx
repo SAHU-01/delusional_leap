@@ -72,10 +72,6 @@ export const CustomPaywall: React.FC<CustomPaywallProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
 
-  // Debug: Log visibility changes
-  console.log('=== CustomPaywall RENDER ===');
-  console.log('CustomPaywall visible:', visible);
-
   const handleSelectPlan = (planId: string) => {
     if (hapticEnabled) {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -225,7 +221,7 @@ export const CustomPaywall: React.FC<CustomPaywallProps> = ({
                   plan.isPopular && styles.planCardPopular,
                 ]}
                 onPress={() => handleSelectPlan(plan.id)}
-                activeOpacity={0.8}
+                activeOpacity={0.7}
               >
                 {plan.badge && (
                   <View style={styles.badgeContainer}>
@@ -281,7 +277,7 @@ export const CustomPaywall: React.FC<CustomPaywallProps> = ({
             style={styles.ctaButton}
             onPress={handlePurchase}
             disabled={isLoading}
-            activeOpacity={0.8}
+            activeOpacity={0.7}
           >
             <LinearGradient
               colors={[Colors.hibiscus, Colors.sunset]}
@@ -333,7 +329,7 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: 'rgba(27, 10, 46, 0.95)',
     justifyContent: 'center',
-    paddingHorizontal: 24,
+    paddingHorizontal: 20,
   },
   content: {
     alignItems: 'center',

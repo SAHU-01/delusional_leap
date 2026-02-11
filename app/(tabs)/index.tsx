@@ -6,6 +6,9 @@ import {
   TouchableOpacity,
   Dimensions,
   Alert,
+  TextInput,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -26,18 +29,27 @@ import Animated, {
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Colors, Fonts } from '@/constants/theme';
-import { useStore, MoveProof } from '@/store';
+import { useStore, MoveProof, SponsoredChallenge } from '@/store';
 import { useIsPremium } from '@/hooks/useIsPremium';
 import { presentPaywall } from '@/utils/revenueCat';
 import VerificationModal from '@/components/VerificationModal';
 import CustomPaywall from '@/components/CustomPaywall';
+import SponsoredChallengeCard from '@/components/SponsoredChallengeCard';
+import {
+  subscribeToDailyTasks,
+  subscribeToSponsoredChallenges,
+  unsubscribeFromChannel,
+} from '@/lib/supabase';
 
 const { width, height } = Dimensions.get('window');
-const CARD_WIDTH = width * 0.72;
-const CARD_HEIGHT = 240;
+const CARD_WIDTH = 300;
+const CARD_HEIGHT = 280;
 const FAN_ROTATION = 8;
-const SIDE_CARD_OFFSET_X = 50;
-const SIDE_CARD_OFFSET_Y = 12;
+// Side cards need enough offset to peek past center card edge
+// Center card is 300px, side cards are 255px (scaled 0.85)
+// For ~20px peek: offset needs to be (150 - 127.5) + 20 = 42.5px
+const SIDE_CARD_OFFSET_X = 45;
+const SIDE_CARD_OFFSET_Y = 10;
 
 // Swipe thresholds
 const SWIPE_X_THRESHOLD = 80;
@@ -103,9 +115,9 @@ const FAN_POSITIONS: Record<string, FanPosition> = {
     rotation: -FAN_ROTATION,
     translateX: -SIDE_CARD_OFFSET_X,
     translateY: SIDE_CARD_OFFSET_Y,
-    scale: 0.88,
-    opacity: 0.8,
-    zIndex: 1,
+    scale: 0.85, // Smaller for clearer hierarchy
+    opacity: 0.6, // More faded to background
+    zIndex: 5,
   },
   center: {
     position: 'center',
@@ -114,16 +126,16 @@ const FAN_POSITIONS: Record<string, FanPosition> = {
     translateY: 0,
     scale: 1,
     opacity: 1,
-    zIndex: 3,
+    zIndex: 10, // Front card clearly on top
   },
   right: {
     position: 'right',
     rotation: FAN_ROTATION,
     translateX: SIDE_CARD_OFFSET_X,
     translateY: SIDE_CARD_OFFSET_Y,
-    scale: 0.88,
-    opacity: 0.8,
-    zIndex: 1,
+    scale: 0.85, // Smaller for clearer hierarchy
+    opacity: 0.6, // More faded to background
+    zIndex: 5,
   },
 };
 
@@ -144,6 +156,7 @@ const CardContent: React.FC<CardContentProps> = ({ move, isCenter, onCompletePre
       }
       style={styles.cardGradient}
     >
+      {/* ROW 1: Badge + Points */}
       <View style={styles.cardHeader}>
         <View style={[styles.badge, { backgroundColor: config.badgeColor }]}>
           <Text style={styles.badgeText}>
@@ -153,9 +166,15 @@ const CardContent: React.FC<CardContentProps> = ({ move, isCenter, onCompletePre
         <Text style={styles.points}>{config.points}</Text>
       </View>
 
-      <Text style={styles.cardTitle}>{move.title}</Text>
-      <Text style={styles.cardDescription} numberOfLines={3}>{move.description}</Text>
+      {/* ROW 2: Title */}
+      <Text style={styles.cardTitle} numberOfLines={2}>{move.title}</Text>
 
+      {/* ROW 3: Description Area */}
+      <View style={styles.cardDescriptionContainer}>
+        <Text style={styles.cardDescription} numberOfLines={4}>{move.description}</Text>
+      </View>
+
+      {/* ROW 4: Time Estimate + Complete Button (pushed to bottom) */}
       <View style={styles.cardFooter}>
         <Text style={styles.timeEstimate}>{move.timeEstimate}</Text>
 
@@ -163,18 +182,12 @@ const CardContent: React.FC<CardContentProps> = ({ move, isCenter, onCompletePre
           <TouchableOpacity
             style={styles.completeButton}
             onPress={onCompletePress}
-            activeOpacity={0.8}
+            activeOpacity={0.7}
           >
             <Text style={styles.completeButtonText}>Complete</Text>
           </TouchableOpacity>
         )}
       </View>
-
-      {isCenter && (
-        <View style={styles.swipeHint}>
-          <Text style={styles.swipeHintText}>swipe up to complete · left/right to browse</Text>
-        </View>
-      )}
     </LinearGradient>
   );
 };
@@ -216,9 +229,10 @@ const SideCard: React.FC<SideCardProps> = ({ move, fanPosition, centerTranslateX
 
   return (
     <Animated.View
+      pointerEvents="none"
       style={[
         styles.card,
-        { zIndex: fanPosition.zIndex },
+        styles.sideCard,
         animatedStyle,
       ]}
     >
@@ -253,36 +267,41 @@ const SwipeableCardFan: React.FC<SwipeableCardFanProps> = ({
   const translateY = useSharedValue(0);
   const isExiting = useSharedValue(false);
 
+  // Clamp focusedIndex to valid range
+  const safeFocusedIndex = Math.max(0, Math.min(focusedIndex, moves.length - 1));
+
   // Get fan position for each card
   const getCardFanPosition = useCallback((cardIndex: number, totalCards: number): FanPosition => {
     if (totalCards === 1) {
       return FAN_POSITIONS.center;
     }
     if (totalCards === 2) {
-      if (cardIndex === focusedIndex) return FAN_POSITIONS.center;
-      return cardIndex < focusedIndex ? FAN_POSITIONS.left : FAN_POSITIONS.right;
+      if (cardIndex === safeFocusedIndex) return FAN_POSITIONS.center;
+      return cardIndex < safeFocusedIndex ? FAN_POSITIONS.left : FAN_POSITIONS.right;
     }
     // Three cards - wrap around
-    if (cardIndex === focusedIndex) return FAN_POSITIONS.center;
-    const leftIndex = (focusedIndex - 1 + 3) % 3;
-    const rightIndex = (focusedIndex + 1) % 3;
+    if (cardIndex === safeFocusedIndex) return FAN_POSITIONS.center;
+    const leftIndex = (safeFocusedIndex - 1 + totalCards) % totalCards;
+    const rightIndex = (safeFocusedIndex + 1) % totalCards;
     if (cardIndex === leftIndex) return FAN_POSITIONS.left;
     if (cardIndex === rightIndex) return FAN_POSITIONS.right;
     return FAN_POSITIONS.center;
-  }, [focusedIndex]);
+  }, [safeFocusedIndex, moves.length]);
 
-  // Get the center card's move
-  const centerMove = moves[focusedIndex];
+  // Get the center card's move (use safe index)
+  const centerMove = moves[safeFocusedIndex];
+  const centerMoveId = centerMove?.id;
 
-  // Pan gesture for center card
+  // Pan gesture for center card - use minDistance to allow taps on Complete button
   const panGesture = Gesture.Pan()
+    .minDistance(10)
     .onUpdate((event) => {
       if (isExiting.value) return;
       translateX.value = event.translationX;
       translateY.value = Math.min(0, event.translationY); // Only allow upward movement
     })
     .onEnd((event) => {
-      if (isExiting.value) return;
+      if (isExiting.value || !centerMoveId) return;
 
       const { translationX: tX, translationY: tY, velocityX, velocityY } = event;
 
@@ -290,7 +309,7 @@ const SwipeableCardFan: React.FC<SwipeableCardFanProps> = ({
       if (tY < SWIPE_Y_THRESHOLD || velocityY < -SWIPE_VELOCITY_THRESHOLD) {
         isExiting.value = true;
         translateY.value = withTiming(-height, { duration: 300 }, () => {
-          runOnJS(onSwipeUp)(centerMove.id);
+          runOnJS(onSwipeUp)(centerMoveId);
         });
         return;
       }
@@ -325,7 +344,7 @@ const SwipeableCardFan: React.FC<SwipeableCardFanProps> = ({
     translateX.value = 0;
     translateY.value = 0;
     isExiting.value = false;
-  }, [focusedIndex, moves.length]);
+  }, [safeFocusedIndex, moves.length]);
 
   // Animated styles for center card (with gesture)
   const centerAnimatedStyle = useAnimatedStyle(() => {
@@ -372,42 +391,53 @@ const SwipeableCardFan: React.FC<SwipeableCardFanProps> = ({
     return order[a.position as keyof typeof order] - order[b.position as keyof typeof order];
   });
 
+  // Guard: don't render if no moves
+  if (moves.length === 0 || !centerMove) {
+    return null;
+  }
+
   return (
-    <View style={styles.cardFanContainer}>
-      {renderOrder.map(({ move, index, position }) => {
-        const fanPosition = getCardFanPosition(index, moves.length);
-        const isCenter = position === 'center';
+    <View style={styles.cardFanWrapper} pointerEvents="box-none">
+      <View style={styles.cardFanContainer} pointerEvents="box-none">
+        {renderOrder.map(({ move, index, position }) => {
+          const fanPosition = getCardFanPosition(index, moves.length);
+          const isCenter = position === 'center';
 
-        if (isCenter) {
+          if (isCenter) {
+            return (
+              <GestureDetector key={move.id} gesture={panGesture}>
+                <Animated.View
+                  style={[
+                    styles.card,
+                    styles.centerCard,
+                    centerAnimatedStyle,
+                  ]}
+                >
+                  <CardContent
+                    move={move}
+                    isCenter={true}
+                    onCompletePress={() => onCompletePress(move.id)}
+                  />
+                </Animated.View>
+              </GestureDetector>
+            );
+          }
+
+          // Side cards - use separate component for proper hook usage
           return (
-            <GestureDetector key={move.id} gesture={panGesture}>
-              <Animated.View
-                style={[
-                  styles.card,
-                  { zIndex: fanPosition.zIndex },
-                  centerAnimatedStyle,
-                ]}
-              >
-                <CardContent
-                  move={move}
-                  isCenter={true}
-                  onCompletePress={() => onCompletePress(move.id)}
-                />
-              </Animated.View>
-            </GestureDetector>
+            <SideCard
+              key={move.id}
+              move={move}
+              fanPosition={fanPosition}
+              centerTranslateX={translateX}
+            />
           );
-        }
-
-        // Side cards - use separate component for proper hook usage
-        return (
-          <SideCard
-            key={move.id}
-            move={move}
-            fanPosition={fanPosition}
-            centerTranslateX={translateX}
-          />
-        );
-      })}
+        })}
+      </View>
+      {/* Swipe hint below the card */}
+      <View style={styles.swipeHintContainer}>
+        <Text style={styles.swipeHintText}>swipe up to complete · left/right to browse</Text>
+      </View>
     </View>
   );
 };
@@ -491,6 +521,9 @@ const CelebrationScreen: React.FC<CelebrationScreenProps> = ({
             style={styles.winCard}
           >
             <View style={styles.winCardContent}>
+              {/* App Title */}
+              <Text style={styles.winCardAppTitle}>Delusional Leap</Text>
+
               <View style={styles.winCardBadge}>
                 <Text style={styles.winCardBadgeText}>
                   🌺 Today's Moves Complete!
@@ -515,6 +548,8 @@ const CelebrationScreen: React.FC<CelebrationScreenProps> = ({
                   🔥 {streakCount}-day streak
                 </Text>
               </View>
+              {/* Gabby's Community */}
+              <Text style={styles.winCardCommunity}>built for Gabby's community 🌺</Text>
               <View style={styles.winCardBranding}>
                 <Text style={styles.winCardBrandText}>@delusionalleap</Text>
                 <Text style={styles.winCardBrandDivider}>•</Text>
@@ -550,7 +585,7 @@ const CelebrationScreen: React.FC<CelebrationScreenProps> = ({
           style={styles.shareButton}
           onPress={handleShareWin}
           disabled={isSharing}
-          activeOpacity={0.8}
+          activeOpacity={0.7}
         >
           <LinearGradient
             colors={[Colors.hibiscus, Colors.sunset]}
@@ -588,27 +623,451 @@ const StreakBanner: React.FC<{ streakCount: number }> = ({ streakCount }) => {
 
 const FREE_MOVES_PER_DAY = 3;
 
+// First-time task types
+interface FirstTimeTask {
+  id: 'name' | 'email' | 'bucketlist';
+  type: 'quick' | 'power' | 'boss';
+  title: string;
+  placeholder: string;
+  completed: boolean;
+  inputType: 'text' | 'email' | 'textarea';
+}
+
+const FIRST_TIME_TASKS: FirstTimeTask[] = [
+  {
+    id: 'name',
+    type: 'quick',
+    title: "what should we call you? 💕",
+    placeholder: "your name or nickname",
+    completed: false,
+    inputType: 'text',
+  },
+  {
+    id: 'email',
+    type: 'power',
+    title: "drop your email so we can keep you in the loop 📧",
+    placeholder: "your@email.com",
+    completed: false,
+    inputType: 'email',
+  },
+  {
+    id: 'bucketlist',
+    type: 'boss',
+    title: "what's #1 on your bucket list? dream big 🌍",
+    placeholder: "travel solo to Bali, start a business, get that promotion...",
+    completed: false,
+    inputType: 'textarea',
+  },
+];
+
+// Email validation helper
+const isValidEmail = (email: string): boolean => {
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email);
+};
+
+// First-time task card content component
+interface FirstTimeTaskCardContentProps {
+  task: FirstTimeTask;
+  isCenter: boolean;
+  value: string;
+  onValueChange: (value: string) => void;
+  onComplete: () => void;
+}
+
+const FirstTimeTaskCardContent: React.FC<FirstTimeTaskCardContentProps> = ({
+  task,
+  isCenter,
+  value,
+  onValueChange,
+  onComplete,
+}) => {
+  const config = MOVE_TYPE_CONFIG[task.type];
+
+  const canComplete = () => {
+    if (task.id === 'email') {
+      return isValidEmail(value);
+    }
+    return value.trim().length > 0;
+  };
+
+  return (
+    <LinearGradient
+      colors={isCenter
+        ? ['rgba(255, 255, 255, 0.15)', 'rgba(255, 255, 255, 0.08)']
+        : ['rgba(255, 255, 255, 0.10)', 'rgba(255, 255, 255, 0.05)']
+      }
+      style={styles.cardGradient}
+    >
+      {/* ROW 1: Badge + Points */}
+      <View style={styles.cardHeader}>
+        <View style={[styles.badge, { backgroundColor: config.badgeColor }]}>
+          <Text style={styles.badgeText}>
+            {config.emoji} {config.badge}
+          </Text>
+        </View>
+        <Text style={styles.points}>{config.points}</Text>
+      </View>
+
+      {/* ROW 2: Title */}
+      <Text style={styles.cardTitle} numberOfLines={2}>{task.title}</Text>
+
+      {/* ROW 3: Input Area */}
+      <View style={styles.cardInputContainer}>
+        {isCenter ? (
+          task.inputType === 'textarea' ? (
+            <TextInput
+              style={[styles.firstTimeInput, styles.firstTimeTextArea]}
+              placeholder={task.placeholder}
+              placeholderTextColor="rgba(255, 251, 245, 0.4)"
+              value={value}
+              onChangeText={onValueChange}
+              multiline
+              numberOfLines={3}
+              autoCapitalize="sentences"
+            />
+          ) : (
+            <TextInput
+              style={styles.firstTimeInput}
+              placeholder={task.placeholder}
+              placeholderTextColor="rgba(255, 251, 245, 0.4)"
+              value={value}
+              onChangeText={onValueChange}
+              keyboardType={task.inputType === 'email' ? 'email-address' : 'default'}
+              autoCapitalize={task.inputType === 'email' ? 'none' : 'words'}
+              autoComplete={task.inputType === 'email' ? 'email' : 'name'}
+            />
+          )
+        ) : (
+          <View style={styles.firstTimeInputPlaceholder}>
+            <Text style={styles.firstTimeInputPlaceholderText}>{task.placeholder}</Text>
+          </View>
+        )}
+      </View>
+
+      {/* ROW 4: Badge Text + Save Button (pushed to bottom) */}
+      <View style={styles.cardFooter}>
+        <Text style={styles.timeEstimate}>
+          {task.id === 'email' && value.length > 0 && !isValidEmail(value)
+            ? '⚠️ enter a valid email'
+            : '✨ day 1 vibes'}
+        </Text>
+
+        {isCenter && (
+          <TouchableOpacity
+            style={[styles.completeButton, !canComplete() && styles.completeButtonDisabled]}
+            onPress={onComplete}
+            activeOpacity={0.7}
+            disabled={!canComplete()}
+          >
+            <Text style={styles.completeButtonText}>Save</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+    </LinearGradient>
+  );
+};
+
+// Side card component for first-time tasks
+interface FirstTimeSideCardProps {
+  task: FirstTimeTask;
+  fanPosition: FanPosition;
+  centerTranslateX: SharedValue<number>;
+  value: string;
+}
+
+const FirstTimeSideCard: React.FC<FirstTimeSideCardProps> = ({ task, fanPosition, centerTranslateX, value }) => {
+  const animatedStyle = useAnimatedStyle(() => {
+    const shiftX = interpolate(
+      centerTranslateX.value,
+      [-100, 0, 100],
+      [fanPosition.position === 'left' ? -20 : 10, 0, fanPosition.position === 'right' ? 20 : -10],
+      Extrapolation.CLAMP
+    );
+
+    const shiftScale = interpolate(
+      Math.abs(centerTranslateX.value),
+      [0, 100],
+      [fanPosition.scale, fanPosition.scale + 0.05],
+      Extrapolation.CLAMP
+    );
+
+    return {
+      opacity: fanPosition.opacity,
+      transform: [
+        { translateX: fanPosition.translateX + shiftX },
+        { translateY: fanPosition.translateY },
+        { rotate: `${fanPosition.rotation}deg` },
+        { scale: shiftScale },
+      ],
+    };
+  });
+
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={[
+        styles.card,
+        styles.sideCard,
+        animatedStyle,
+      ]}
+    >
+      <FirstTimeTaskCardContent
+        task={task}
+        isCenter={false}
+        value={value}
+        onValueChange={() => {}}
+        onComplete={() => {}}
+      />
+    </Animated.View>
+  );
+};
+
+// Swipeable fan for first-time tasks
+interface FirstTimeSwipeableCardFanProps {
+  tasks: FirstTimeTask[];
+  focusedIndex: number;
+  values: Record<string, string>;
+  onValueChange: (taskId: string, value: string) => void;
+  onSwipeLeft: () => void;
+  onSwipeRight: () => void;
+  onSwipeUp: (taskId: string) => void;
+  onCompletePress: (taskId: string) => void;
+}
+
+const FirstTimeSwipeableCardFan: React.FC<FirstTimeSwipeableCardFanProps> = ({
+  tasks,
+  focusedIndex,
+  values,
+  onValueChange,
+  onSwipeLeft,
+  onSwipeRight,
+  onSwipeUp,
+  onCompletePress,
+}) => {
+  const translateX = useSharedValue(0);
+  const translateY = useSharedValue(0);
+  const isExiting = useSharedValue(false);
+
+  // Clamp focusedIndex to valid range
+  const safeFocusedIndex = Math.max(0, Math.min(focusedIndex, tasks.length - 1));
+
+  const getCardFanPosition = useCallback((cardIndex: number, totalCards: number): FanPosition => {
+    if (totalCards === 1) {
+      return FAN_POSITIONS.center;
+    }
+    if (totalCards === 2) {
+      if (cardIndex === safeFocusedIndex) return FAN_POSITIONS.center;
+      return cardIndex < safeFocusedIndex ? FAN_POSITIONS.left : FAN_POSITIONS.right;
+    }
+    // Three cards - wrap around
+    if (cardIndex === safeFocusedIndex) return FAN_POSITIONS.center;
+    const leftIndex = (safeFocusedIndex - 1 + totalCards) % totalCards;
+    const rightIndex = (safeFocusedIndex + 1) % totalCards;
+    if (cardIndex === leftIndex) return FAN_POSITIONS.left;
+    if (cardIndex === rightIndex) return FAN_POSITIONS.right;
+    return FAN_POSITIONS.center;
+  }, [safeFocusedIndex, tasks.length]);
+
+  const centerTask = tasks[safeFocusedIndex];
+  const centerTaskId = centerTask?.id;
+
+  const canComplete = () => {
+    if (!centerTask) return false;
+    const value = values[centerTask.id] || '';
+    if (centerTask.id === 'email') {
+      return isValidEmail(value);
+    }
+    return value.trim().length > 0;
+  };
+
+  // Pan gesture - use minDistance to allow taps on Save button and inputs
+  const panGesture = Gesture.Pan()
+    .minDistance(10)
+    .onUpdate((event) => {
+      if (isExiting.value) return;
+      translateX.value = event.translationX;
+      translateY.value = Math.min(0, event.translationY);
+    })
+    .onEnd((event) => {
+      if (isExiting.value || !centerTaskId) return;
+
+      const { translationX: tX, translationY: tY, velocityX, velocityY } = event;
+
+      // Check for swipe up (complete) - only if can complete
+      if ((tY < SWIPE_Y_THRESHOLD || velocityY < -SWIPE_VELOCITY_THRESHOLD) && canComplete()) {
+        isExiting.value = true;
+        translateY.value = withTiming(-height, { duration: 300 }, () => {
+          runOnJS(onSwipeUp)(centerTaskId);
+        });
+        return;
+      }
+
+      // Check for swipe left (bring right card to center)
+      if (tX < -SWIPE_X_THRESHOLD || velocityX < -SWIPE_VELOCITY_THRESHOLD) {
+        translateX.value = withTiming(-width, { duration: 200 }, () => {
+          translateX.value = 0;
+          translateY.value = 0;
+          runOnJS(onSwipeLeft)();
+        });
+        return;
+      }
+
+      // Check for swipe right (bring left card to center)
+      if (tX > SWIPE_X_THRESHOLD || velocityX > SWIPE_VELOCITY_THRESHOLD) {
+        translateX.value = withTiming(width, { duration: 200 }, () => {
+          translateX.value = 0;
+          translateY.value = 0;
+          runOnJS(onSwipeRight)();
+        });
+        return;
+      }
+
+      // Snap back
+      translateX.value = withSpring(0, { damping: 15, stiffness: 150 });
+      translateY.value = withSpring(0, { damping: 15, stiffness: 150 });
+    });
+
+  useEffect(() => {
+    translateX.value = 0;
+    translateY.value = 0;
+    isExiting.value = false;
+  }, [safeFocusedIndex, tasks.length]);
+
+  const centerAnimatedStyle = useAnimatedStyle(() => {
+    const rotation = interpolate(
+      translateX.value,
+      [-width / 2, 0, width / 2],
+      [-15, 0, 15],
+      Extrapolation.CLAMP
+    );
+
+    const scale = interpolate(
+      Math.abs(translateY.value),
+      [0, 150],
+      [1, 0.9],
+      Extrapolation.CLAMP
+    );
+
+    const opacity = interpolate(
+      translateY.value,
+      [0, -200],
+      [1, 0.5],
+      Extrapolation.CLAMP
+    );
+
+    return {
+      opacity,
+      transform: [
+        { translateX: translateX.value },
+        { translateY: translateY.value },
+        { rotate: `${rotation}deg` },
+        { scale },
+      ],
+    };
+  });
+
+  // Guard: don't render if no tasks
+  if (tasks.length === 0 || !centerTask) {
+    return null;
+  }
+
+  // Build render order: left, right, then center (so center is on top)
+  const renderOrder: { task: FirstTimeTask; index: number; position: string }[] = [];
+  tasks.forEach((task, index) => {
+    const pos = getCardFanPosition(index, tasks.length);
+    renderOrder.push({ task, index, position: pos.position });
+  });
+  renderOrder.sort((a, b) => {
+    const order = { left: 0, right: 1, center: 2 };
+    return order[a.position as keyof typeof order] - order[b.position as keyof typeof order];
+  });
+
+  return (
+    <View style={styles.cardFanWrapper} pointerEvents="box-none">
+      <View style={styles.cardFanContainer} pointerEvents="box-none">
+        {renderOrder.map(({ task, index, position }) => {
+          const fanPosition = getCardFanPosition(index, tasks.length);
+          const isCenter = position === 'center';
+
+          if (isCenter) {
+            return (
+              <GestureDetector key={task.id} gesture={panGesture}>
+                <Animated.View
+                  style={[
+                    styles.card,
+                    styles.centerCard,
+                    centerAnimatedStyle,
+                  ]}
+                >
+                  <FirstTimeTaskCardContent
+                    task={task}
+                    isCenter={true}
+                    value={values[task.id] || ''}
+                    onValueChange={(v) => onValueChange(task.id, v)}
+                    onComplete={() => onCompletePress(task.id)}
+                  />
+                </Animated.View>
+              </GestureDetector>
+            );
+          }
+
+          return (
+            <FirstTimeSideCard
+              key={task.id}
+              task={task}
+              fanPosition={fanPosition}
+              centerTranslateX={translateX}
+              value={values[task.id] || ''}
+            />
+          );
+        })}
+      </View>
+      {/* Swipe hint below the card */}
+      <View style={styles.swipeHintContainer}>
+        <Text style={styles.swipeHintText}>swipe up to save · left/right to browse</Text>
+      </View>
+    </View>
+  );
+};
+
 export default function TodayTab() {
   const confettiRef = useRef<ConfettiCannon>(null);
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [quote, setQuote] = useState(GABBY_QUOTES[0]);
   const [showingPaywall, setShowingPaywall] = useState(false);
   const [showCustomPaywall, setShowCustomPaywall] = useState(false);
+  const paywallDismissedRef = useRef(false);
   const [showVerificationModal, setShowVerificationModal] = useState(false);
   const [moveToVerify, setMoveToVerify] = useState<DailyMove | null>(null);
+
+  // First-time task state
+  const [firstTimeTaskIndex, setFirstTimeTaskIndex] = useState(0);
+  const [nameInput, setNameInput] = useState('');
+  const [emailInput, setEmailInput] = useState('');
+  const [bucketListInput, setBucketListInput] = useState('');
+  const [completedFirstTimeTasks, setCompletedFirstTimeTasks] = useState<Set<string>>(new Set());
 
   const { isPremium, loading: premiumLoading } = useIsPremium();
 
   const {
+    user,
     dailyMoves,
     streaks,
     generateDailyMoves,
+    loadDailyTasksFromSupabase,
+    loadSponsoredChallenges,
     completeDailyMove,
     dailyMovesCompletedToday,
     settings,
     activeDream,
     totalMovesCompleted,
     addProof,
+    sponsoredChallenges,
+    setUserName,
+    setUserEmail,
+    setUserBucketListItem,
+    completeFirstTime,
   } = useStore();
 
   // Get today's completed moves count for paywall trigger
@@ -618,8 +1077,34 @@ export default function TodayTab() {
   ).length;
 
   useEffect(() => {
-    generateDailyMoves();
-  }, []);
+    // Only load regular tasks if first-time tasks are complete
+    if (user.firstTimeComplete) {
+      // Try to load daily tasks from Supabase first, fall back to local
+      loadDailyTasksFromSupabase().catch(() => {
+        generateDailyMoves();
+      });
+    }
+
+    // Load sponsored challenges from Supabase
+    loadSponsoredChallenges();
+
+    // Set up realtime subscriptions
+    const dailyTasksChannel = subscribeToDailyTasks((payload) => {
+      // Reload tasks when changes happen
+      loadDailyTasksFromSupabase().catch(() => {});
+    });
+
+    const sponsoredChannel = subscribeToSponsoredChallenges((payload) => {
+      // Reload sponsored challenges when changes happen
+      loadSponsoredChallenges();
+    });
+
+    // Cleanup subscriptions on unmount
+    return () => {
+      unsubscribeFromChannel(dailyTasksChannel);
+      unsubscribeFromChannel(sponsoredChannel);
+    };
+  }, [user.firstTimeComplete]);
 
   useEffect(() => {
     const randomQuote = GABBY_QUOTES[Math.floor(Math.random() * GABBY_QUOTES.length)];
@@ -633,12 +1118,47 @@ export default function TodayTab() {
   const incompleteMoves = todayMoves.filter((m) => !m.completed);
   const allCompleted = todayMoves.length > 0 && incompleteMoves.length === 0;
 
-  // Debug logging for paywall state
-  console.log('=== TODAY TAB RENDER ===');
-  console.log('todayCompletedCount:', todayCompletedCount);
-  console.log('allCompleted:', allCompleted);
-  console.log('showCustomPaywall:', showCustomPaywall);
-  console.log('isPremium:', isPremium);
+  // Handle first-time task completion
+  const handleFirstTimeTaskComplete = useCallback((taskId: 'name' | 'email' | 'bucketlist') => {
+    if (settings.haptics) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    }
+    confettiRef.current?.start();
+
+    // Save the data
+    if (taskId === 'name') {
+      setUserName(nameInput);
+    } else if (taskId === 'email') {
+      setUserEmail(emailInput);
+    } else if (taskId === 'bucketlist') {
+      setUserBucketListItem(bucketListInput);
+    }
+
+    // Mark this task as completed
+    const newCompleted = new Set(completedFirstTimeTasks);
+    newCompleted.add(taskId);
+    setCompletedFirstTimeTasks(newCompleted);
+
+    // Check if all first-time tasks are complete
+    if (newCompleted.size >= 3) {
+      // All first-time tasks done
+      setTimeout(() => {
+        completeFirstTime();
+        // Load regular tasks
+        loadDailyTasksFromSupabase().catch(() => {
+          generateDailyMoves();
+        });
+      }, 500);
+    } else {
+      // Reset index to 0 so first remaining task is centered in the new fan
+      setFirstTimeTaskIndex(0);
+    }
+  }, [settings.haptics, nameInput, emailInput, bucketListInput, completedFirstTimeTasks, setUserName, setUserEmail, setUserBucketListItem, completeFirstTime, loadDailyTasksFromSupabase, generateDailyMoves]);
+
+  // Get incomplete first-time tasks
+  const incompleteFirstTimeTasks = FIRST_TIME_TASKS.filter(
+    (task) => !completedFirstTimeTasks.has(task.id)
+  );
 
   const totalPointsEarned = todayMoves
     .filter((m) => m.completed)
@@ -663,17 +1183,16 @@ export default function TodayTab() {
   // Show paywall after completing 3rd move (moment of delight)
   const triggerPaywallIfNeeded = useCallback((newCompletedCount: number) => {
     const shouldShowPaywall = !isPremium && newCompletedCount >= FREE_MOVES_PER_DAY;
-    console.log(`Move completed. Total today: ${newCompletedCount}. Should show paywall: ${shouldShowPaywall}`);
-    console.log(`isPremium: ${isPremium}, FREE_MOVES_PER_DAY: ${FREE_MOVES_PER_DAY}`);
 
     // Only show paywall for free users after 3rd move
-    if (shouldShowPaywall) {
-      console.log('Triggering paywall - setting showingPaywall to true');
+    if (shouldShowPaywall && !paywallDismissedRef.current) {
+      paywallDismissedRef.current = false; // Reset ref when triggering
       setShowingPaywall(true);
       // Small delay to let confetti play, then show custom paywall
       setTimeout(() => {
-        console.log('Timeout fired - setting showCustomPaywall to true');
-        setShowCustomPaywall(true);
+        if (!paywallDismissedRef.current) {
+          setShowCustomPaywall(true);
+        }
         setShowingPaywall(false);
       }, 1500);
     }
@@ -681,6 +1200,7 @@ export default function TodayTab() {
 
   // Handle paywall close - show celebration screen
   const handlePaywallClose = useCallback(() => {
+    paywallDismissedRef.current = true; // Set ref so paywall doesn't reappear
     setShowCustomPaywall(false);
   }, []);
 
@@ -726,9 +1246,6 @@ export default function TodayTab() {
 
   // Handle verification complete callback
   const handleVerificationComplete = useCallback((proof: Omit<MoveProof, 'id' | 'completedAt' | 'date'>) => {
-    console.log('=== VERIFICATION COMPLETE ===');
-    console.log('Current todayCompletedCount:', todayCompletedCount);
-
     setShowVerificationModal(false);
 
     if (!moveToVerify) return;
@@ -740,7 +1257,7 @@ export default function TodayTab() {
     confettiRef.current?.start();
 
     const newCompletedCount = todayCompletedCount + 1;
-    console.log('New completed count will be:', newCompletedCount);
+    const moveId = moveToVerify.id;
 
     // Save proof to history
     const fullProof: MoveProof = {
@@ -751,26 +1268,132 @@ export default function TodayTab() {
     };
     addProof(fullProof);
 
+    // Calculate the new focused index BEFORE completing (to avoid stale state)
+    const remainingCount = incompleteMoves.length - 1;
+    if (remainingCount > 0 && focusedIndex >= remainingCount) {
+      setFocusedIndex(0);
+    }
+
+    // Clear moveToVerify immediately to prevent double-completion
+    setMoveToVerify(null);
+
     // Complete the move after a short delay for animation
     setTimeout(() => {
-      completeDailyMove(moveToVerify.id);
-      // Reset focus if needed
-      const remaining = incompleteMoves.filter((m) => m.id !== moveToVerify.id);
-      if (remaining.length > 0 && focusedIndex >= remaining.length) {
-        setFocusedIndex(0);
-      }
-      setMoveToVerify(null);
+      // Pass the proof to completeDailyMove so it can be recorded in Supabase
+      completeDailyMove(moveId, fullProof);
 
       // Trigger paywall after 3rd move completion
       triggerPaywallIfNeeded(newCompletedCount);
     }, 100);
-  }, [settings.haptics, completeDailyMove, incompleteMoves, focusedIndex, todayCompletedCount, triggerPaywallIfNeeded, moveToVerify, addProof]);
+  }, [settings.haptics, completeDailyMove, incompleteMoves.length, focusedIndex, todayCompletedCount, triggerPaywallIfNeeded, moveToVerify, addProof]);
 
   const handleHaptic = useCallback(() => {
     if (settings.haptics) {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     }
   }, [settings.haptics]);
+
+  // First-time swipe handlers
+  const handleFirstTimeSwipeLeft = useCallback(() => {
+    if (settings.haptics) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    }
+    setFirstTimeTaskIndex((prev) => (prev + 1) % incompleteFirstTimeTasks.length);
+  }, [settings.haptics, incompleteFirstTimeTasks.length]);
+
+  const handleFirstTimeSwipeRight = useCallback(() => {
+    if (settings.haptics) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    }
+    setFirstTimeTaskIndex((prev) => (prev - 1 + incompleteFirstTimeTasks.length) % incompleteFirstTimeTasks.length);
+  }, [settings.haptics, incompleteFirstTimeTasks.length]);
+
+  const handleFirstTimeSwipeUp = useCallback((taskId: string) => {
+    handleFirstTimeTaskComplete(taskId as 'name' | 'email' | 'bucketlist');
+  }, [handleFirstTimeTaskComplete]);
+
+  // Get input values for first-time tasks
+  const firstTimeValues: Record<string, string> = {
+    name: nameInput,
+    email: emailInput,
+    bucketlist: bucketListInput,
+  };
+
+  const handleFirstTimeValueChange = useCallback((taskId: string, value: string) => {
+    if (taskId === 'name') setNameInput(value);
+    else if (taskId === 'email') setEmailInput(value);
+    else setBucketListInput(value);
+  }, []);
+
+  // If first-time tasks are not complete, show them instead of regular tasks
+  if (!user.firstTimeComplete && incompleteFirstTimeTasks.length > 0) {
+    const currentTask = incompleteFirstTimeTasks[Math.min(firstTimeTaskIndex, incompleteFirstTimeTasks.length - 1)];
+
+    return (
+      <GestureHandlerRootView style={styles.container}>
+        <KeyboardAvoidingView
+          style={styles.container}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
+          <SafeAreaView style={styles.container} edges={['top']}>
+            <View style={styles.content}>
+              {/* Welcome Header */}
+              <Text style={styles.todayHeader}>welcome bestie 🌺</Text>
+              <Text style={styles.todaySubheader}>
+                {`${incompleteFirstTimeTasks.length} quick thing${incompleteFirstTimeTasks.length !== 1 ? 's' : ''} before we start`}
+              </Text>
+
+              {/* First-Time Task Fan */}
+              <FirstTimeSwipeableCardFan
+                tasks={incompleteFirstTimeTasks}
+                focusedIndex={firstTimeTaskIndex % incompleteFirstTimeTasks.length}
+                values={firstTimeValues}
+                onValueChange={handleFirstTimeValueChange}
+                onSwipeLeft={handleFirstTimeSwipeLeft}
+                onSwipeRight={handleFirstTimeSwipeRight}
+                onSwipeUp={handleFirstTimeSwipeUp}
+                onCompletePress={(taskId) => handleFirstTimeTaskComplete(taskId as 'name' | 'email' | 'bucketlist')}
+              />
+
+              {/* Progress Dots */}
+              <View style={styles.progressDots}>
+                {FIRST_TIME_TASKS.map((task) => (
+                  <View
+                    key={task.id}
+                    style={[
+                      styles.progressDot,
+                      completedFirstTimeTasks.has(task.id) && styles.progressDotCompleted,
+                      currentTask.id === task.id && styles.progressDotActive,
+                    ]}
+                  />
+                ))}
+              </View>
+
+              {/* Welcome Quote */}
+              <View style={styles.quoteContainer}>
+                <Text style={styles.quoteText}>let's get you set up so we can start chasing those dreams together ✨</Text>
+                <Text style={styles.quoteAuthor}>— Gabby</Text>
+              </View>
+            </View>
+          </SafeAreaView>
+        </KeyboardAvoidingView>
+
+        {/* Confetti at ROOT level - covers entire screen */}
+        <View style={styles.confettiContainer} pointerEvents="none">
+          <ConfettiCannon
+            ref={confettiRef}
+            count={150}
+            origin={{ x: width / 2, y: -20 }}
+            autoStart={false}
+            fadeOut={true}
+            explosionSpeed={400}
+            fallSpeed={3000}
+            colors={[Colors.hibiscus, Colors.sunset, Colors.amber, Colors.skyTeal, '#fff']}
+          />
+        </View>
+      </GestureHandlerRootView>
+    );
+  }
 
   // If all completed, show ONLY celebration view (no header, no streak banner)
   // BUT still render CustomPaywall so it can appear on top after 3rd move!
@@ -819,17 +1442,6 @@ export default function TodayTab() {
   return (
     <GestureHandlerRootView style={styles.container}>
       <SafeAreaView style={styles.container} edges={['top']}>
-        <ConfettiCannon
-          ref={confettiRef}
-          count={100}
-          origin={{ x: width / 2, y: height / 3 }}
-          autoStart={false}
-          fadeOut
-          explosionSpeed={350}
-          fallSpeed={2500}
-          colors={[Colors.hibiscus, Colors.sunset, Colors.amber, Colors.skyTeal, '#fff']}
-        />
-
         <View style={styles.content}>
           {/* Frosted Glass Streak Banner */}
           <StreakBanner streakCount={streaks.count} />
@@ -839,6 +1451,13 @@ export default function TodayTab() {
           <Text style={styles.todaySubheader}>
             {`${incompleteMoves.length} move${incompleteMoves.length !== 1 ? 's' : ''} remaining`}
           </Text>
+
+          {/* Sponsored Challenge (if any) - ABOVE regular cards */}
+          {sponsoredChallenges.length > 0 && (
+            <View pointerEvents="box-none" style={styles.sponsoredSection}>
+              <SponsoredChallengeCard challenge={sponsoredChallenges[0]} />
+            </View>
+          )}
 
           {/* Card Fan */}
           <SwipeableCardFan
@@ -876,6 +1495,20 @@ export default function TodayTab() {
           hapticEnabled={settings.haptics}
         />
       </SafeAreaView>
+
+      {/* Confetti at ROOT level - covers entire screen */}
+      <View style={styles.confettiContainer} pointerEvents="none">
+        <ConfettiCannon
+          ref={confettiRef}
+          count={150}
+          origin={{ x: width / 2, y: -20 }}
+          autoStart={false}
+          fadeOut={true}
+          explosionSpeed={400}
+          fallSpeed={3000}
+          colors={[Colors.hibiscus, Colors.sunset, Colors.amber, Colors.skyTeal, '#fff']}
+        />
+      </View>
     </GestureHandlerRootView>
   );
 }
@@ -887,8 +1520,20 @@ const styles = StyleSheet.create({
   },
   content: {
     flex: 1,
-    paddingHorizontal: 24,
+    paddingHorizontal: 20,
     paddingTop: 16,
+  },
+  confettiContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 999,
+  },
+  sponsoredSection: {
+    marginBottom: 16,
+    zIndex: 1,
   },
   loadingContainer: {
     flex: 1,
@@ -932,20 +1577,30 @@ const styles = StyleSheet.create({
     color: 'rgba(255, 251, 245, 0.7)',
     marginBottom: 32,
   },
+  cardFanWrapper: {
+    alignItems: 'center',
+    overflow: 'visible',
+  },
   cardFanContainer: {
-    height: CARD_HEIGHT + 60,
+    height: CARD_HEIGHT + 30,
+    width: '100%',
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
+    overflow: 'visible',
+  },
+  swipeHintContainer: {
+    marginTop: 16,
+    alignItems: 'center',
   },
   card: {
     width: CARD_WIDTH,
     height: CARD_HEIGHT,
-    borderRadius: 24,
+    borderRadius: 20,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.15)',
-    backgroundColor: Colors.deepPlum,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    backgroundColor: 'rgba(45, 27, 60, 0.95)',
     position: 'absolute',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 8 },
@@ -953,15 +1608,22 @@ const styles = StyleSheet.create({
     shadowRadius: 16,
     elevation: 10,
   },
+  centerCard: {
+    zIndex: 10,
+  },
+  sideCard: {
+    zIndex: 5,
+    pointerEvents: 'none' as const,
+  },
   cardGradient: {
     flex: 1,
-    padding: 20,
+    padding: 24,
+    flexDirection: 'column',
   },
   cardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 12,
   },
   badge: {
     paddingHorizontal: 12,
@@ -979,23 +1641,34 @@ const styles = StyleSheet.create({
     color: Colors.cream,
   },
   cardTitle: {
-    fontFamily: Fonts.fraunces.semiBold,
+    fontFamily: Fonts.fraunces.bold,
     fontSize: 18,
     color: Colors.cream,
-    marginBottom: 6,
+    marginTop: 12,
+  },
+  cardDescriptionContainer: {
+    marginTop: 12,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 12,
+    padding: 12,
+    flex: 1,
+    overflow: 'hidden',
   },
   cardDescription: {
     fontFamily: Fonts.sora.regular,
     fontSize: 13,
     color: 'rgba(255, 251, 245, 0.8)',
     lineHeight: 18,
+  },
+  cardInputContainer: {
+    marginTop: 12,
     flex: 1,
   },
   cardFooter: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginTop: 12,
+    paddingTop: 12,
   },
   timeEstimate: {
     fontFamily: Fonts.sora.medium,
@@ -1013,20 +1686,13 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.cream,
   },
-  swipeHint: {
-    position: 'absolute',
-    bottom: 8,
-    left: 0,
-    right: 0,
-    alignItems: 'center',
-  },
   swipeHintText: {
     fontFamily: Fonts.sora.regular,
-    fontSize: 10,
-    color: 'rgba(255, 251, 245, 0.35)',
+    fontSize: 11,
+    color: 'rgba(255, 251, 245, 0.4)',
   },
   quoteContainer: {
-    marginTop: 40,
+    marginTop: 32,
     padding: 20,
     backgroundColor: 'rgba(255, 255, 255, 0.05)',
     borderRadius: 16,
@@ -1050,7 +1716,7 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 24,
+    paddingHorizontal: 20,
   },
   celebrationContent: {
     alignItems: 'center',
@@ -1201,6 +1867,22 @@ const styles = StyleSheet.create({
     fontSize: 18,
     color: Colors.cream,
   },
+  winCardAppTitle: {
+    fontFamily: Fonts.fraunces.bold,
+    fontSize: 28,
+    color: Colors.cream,
+    marginBottom: 16,
+    textAlign: 'center',
+    textShadowColor: 'rgba(0, 0, 0, 0.2)',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 4,
+  },
+  winCardCommunity: {
+    fontFamily: Fonts.sora.medium,
+    fontSize: 14,
+    color: 'rgba(255, 251, 245, 0.9)',
+    marginBottom: 16,
+  },
   winCardBranding: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1217,5 +1899,56 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: 'rgba(255, 251, 245, 0.5)',
     marginHorizontal: 8,
+  },
+  firstTimeInput: {
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    fontFamily: Fonts.sora.regular,
+    fontSize: 14,
+    color: Colors.cream,
+    width: '100%',
+  },
+  firstTimeTextArea: {
+    minHeight: 70,
+    maxHeight: 70,
+    textAlignVertical: 'top',
+  },
+  firstTimeInputPlaceholder: {
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 12,
+    padding: 12,
+    width: '100%',
+  },
+  firstTimeInputPlaceholderText: {
+    fontFamily: Fonts.sora.regular,
+    fontSize: 14,
+    color: 'rgba(255, 251, 245, 0.4)',
+  },
+  completeButtonDisabled: {
+    opacity: 0.5,
+  },
+  progressDots: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 12,
+    marginTop: 32, // Increased gap from card fan
+  },
+  progressDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  progressDotCompleted: {
+    backgroundColor: Colors.skyTeal,
+  },
+  progressDotActive: {
+    backgroundColor: Colors.hibiscus,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
   },
 });

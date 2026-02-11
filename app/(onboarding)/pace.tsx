@@ -33,7 +33,6 @@ export default function PaceScreen() {
   const handleSelect = (paceId: string) => {
     setSelectedPace(paceId);
     setOnboardingPace(paceId);
-    console.log('[Onboarding] Pace selected:', paceId);
 
     // Auto-advance after selection
     setTimeout(() => {

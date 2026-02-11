@@ -19,7 +19,6 @@ export default function BlockScreen() {
   const handleSelect = (blockerId: string) => {
     setSelectedBlocker(blockerId);
     setOnboardingBlocker(blockerId);
-    console.log('[Onboarding] Blocker selected:', blockerId);
 
     // Auto-advance after selection
     setTimeout(() => {

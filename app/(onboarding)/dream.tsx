@@ -19,8 +19,6 @@ export default function DreamScreen() {
   const handleSelect = (dreamId: string) => {
     setSelectedDream(dreamId);
     setOnboardingDream(dreamId);
-    // Log to console for verification
-    console.log('[Onboarding] Dream selected:', dreamId);
 
     // Auto-advance after selection
     setTimeout(() => {

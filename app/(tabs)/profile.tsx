@@ -19,6 +19,7 @@ import { Colors, Fonts } from '@/constants/theme';
 import { useStore, MoveProof } from '@/store';
 import { useIsPremium } from '@/hooks/useIsPremium';
 import { restorePurchases, purchaseStreakFreeze } from '@/utils/revenueCat';
+import { deleteSupabaseUser } from '@/lib/supabase';
 import { Image } from 'react-native';
 
 const { width } = Dimensions.get('window');
@@ -152,15 +153,20 @@ export default function ProfileTab() {
 
   const handleResetApp = () => {
     Alert.alert(
-      'Reset App',
-      'Reset all data? This will restart from onboarding.',
+      'Reset App (Dev)',
+      'This will delete ALL your data including your Supabase user record. You will start fresh from onboarding. This cannot be undone.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Reset',
+          text: 'Reset Everything',
           style: 'destructive',
           onPress: async () => {
             try {
+              // Delete user from Supabase first
+              const userId = user.supabaseUserId;
+              if (userId) {
+                await deleteSupabaseUser(userId);
+              }
               // Clear all AsyncStorage data
               await AsyncStorage.clear();
               // Reset Zustand store to defaults
@@ -256,6 +262,14 @@ export default function ProfileTab() {
               style={styles.winCard}
             >
               <View style={styles.winCardContent}>
+                {/* App Title */}
+                <Text style={styles.winCardAppTitle}>Delusional Leap</Text>
+
+                {/* User Name if available */}
+                {user.name ? (
+                  <Text style={styles.winCardUserName}>{user.name}</Text>
+                ) : null}
+
                 {/* Top Badge */}
                 <View style={styles.winCardBadge}>
                   <Text style={styles.winCardBadgeText}>
@@ -287,6 +301,9 @@ export default function ProfileTab() {
                     🔥 {streaks.count}-day streak
                   </Text>
                 </View>
+
+                {/* Gabby's Community */}
+                <Text style={styles.winCardCommunity}>built for Gabby's community 🌺</Text>
 
                 {/* Branding */}
                 <View style={styles.winCardBranding}>
@@ -551,13 +568,13 @@ export default function ProfileTab() {
         {/* Version */}
         <Text style={styles.versionText}>Delusional Leap v1.0.0</Text>
 
-        {/* Reset App Button */}
+        {/* Reset App Button - Dev Only */}
         <TouchableOpacity
           style={styles.resetAppButton}
           onPress={handleResetApp}
-          activeOpacity={0.8}
+          activeOpacity={0.7}
         >
-          <Text style={styles.resetAppButtonText}>Reset App</Text>
+          <Text style={styles.resetAppButtonText}>Reset App (Dev)</Text>
         </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
@@ -721,6 +738,30 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.sora.semiBold,
     fontSize: 18,
     color: Colors.cream,
+  },
+  winCardAppTitle: {
+    fontFamily: Fonts.fraunces.bold,
+    fontSize: 28,
+    color: Colors.cream,
+    marginBottom: 8,
+    textAlign: 'center',
+    textShadowColor: 'rgba(0, 0, 0, 0.2)',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 4,
+  },
+  winCardUserName: {
+    fontFamily: Fonts.sora.semiBold,
+    fontSize: 18,
+    color: 'rgba(255, 251, 245, 0.9)',
+    marginBottom: 16,
+    textAlign: 'center',
+  },
+  winCardCommunity: {
+    fontFamily: Fonts.sora.medium,
+    fontSize: 14,
+    color: 'rgba(255, 251, 245, 0.9)',
+    marginBottom: 16,
+    textAlign: 'center',
   },
   winCardBranding: {
     flexDirection: 'row',

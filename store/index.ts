@@ -9,4 +9,5 @@ export type {
   Settings,
   VisionBoard,
   OnboardingData,
+  SponsoredChallenge,
 } from './useStore';

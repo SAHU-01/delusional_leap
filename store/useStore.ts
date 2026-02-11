@@ -1,6 +1,16 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  createSupabaseUser,
+  recordMove,
+  updateUserStats,
+  fetchDailyTasks,
+  fetchSponsoredChallenges,
+  upsertUserProfile,
+  SupabaseDailyTask,
+  SupabaseSponsoredChallenge,
+} from '@/lib/supabase';
 
 export interface OnboardingData {
   dream: string | null;
@@ -10,10 +20,27 @@ export interface OnboardingData {
 
 export interface User {
   name: string;
+  email: string;
+  bucketListItem: string;
   quizResult: string | null;
   pace: string | null;
   onboardingComplete: boolean;
+  firstTimeComplete: boolean;
   onboardingData: OnboardingData;
+  supabaseUserId: string | null;
+}
+
+export interface SponsoredChallenge {
+  id: string;
+  title: string;
+  description?: string;
+  sponsorName?: string;
+  sponsorLogoUrl?: string;
+  category?: string;
+  moveType: 'quick' | 'power' | 'boss';
+  pointsBonus: number;
+  startDate?: string;
+  endDate?: string;
 }
 
 export interface Dream {
@@ -95,10 +122,16 @@ interface AppState {
   dailyMovesCompletedToday: number;
   lastDailyMovesDate: string | null;
   proofHistory: MoveProof[];
+  sponsoredChallenges: SponsoredChallenge[];
 
   // User actions
   setUser: (user: Partial<User>) => void;
   resetUser: () => void;
+  setSupabaseUserId: (id: string) => void;
+  setUserName: (name: string) => void;
+  setUserEmail: (email: string) => void;
+  setUserBucketListItem: (item: string) => void;
+  completeFirstTime: () => void;
 
   // Onboarding actions
   setOnboardingDream: (dream: string) => void;
@@ -114,8 +147,10 @@ interface AppState {
 
   // Daily Move actions
   generateDailyMoves: () => void;
-  completeDailyMove: (id: string) => void;
+  loadDailyTasksFromSupabase: () => Promise<void>;
+  completeDailyMove: (id: string, proof?: MoveProof) => void;
   getDailyMoves: () => DailyMove[];
+  loadSponsoredChallenges: () => Promise<void>;
 
   // Move actions
   addMove: (move: Move) => void;
@@ -152,10 +187,14 @@ const initialOnboardingData: OnboardingData = {
 
 const initialUser: User = {
   name: '',
+  email: '',
+  bucketListItem: '',
   quizResult: null,
   pace: null,
   onboardingComplete: false,
+  firstTimeComplete: false,
   onboardingData: initialOnboardingData,
+  supabaseUserId: null,
 };
 
 const initialStreaks: Streaks = {
@@ -333,6 +372,7 @@ export const useStore = create<AppState>()(
       dailyMovesCompletedToday: 0,
       lastDailyMovesDate: null,
       proofHistory: [],
+      sponsoredChallenges: [],
 
       // User actions
       setUser: (userData) =>
@@ -340,6 +380,45 @@ export const useStore = create<AppState>()(
           user: { ...state.user, ...userData },
         })),
       resetUser: () => set({ user: initialUser }),
+      setSupabaseUserId: (id) =>
+        set((state) => ({
+          user: { ...state.user, supabaseUserId: id },
+        })),
+      setUserName: (name) => {
+        set((state) => ({
+          user: { ...state.user, name },
+        }));
+        // Fire-and-forget: Update Supabase
+        const userId = get().user.supabaseUserId;
+        if (userId) {
+          upsertUserProfile(userId, { name });
+        }
+      },
+      setUserEmail: (email) => {
+        set((state) => ({
+          user: { ...state.user, email },
+        }));
+        // Fire-and-forget: Update Supabase
+        const userId = get().user.supabaseUserId;
+        if (userId) {
+          upsertUserProfile(userId, { email });
+        }
+      },
+      setUserBucketListItem: (item) => {
+        set((state) => ({
+          user: { ...state.user, bucketListItem: item },
+        }));
+        // Fire-and-forget: Update Supabase
+        const userId = get().user.supabaseUserId;
+        if (userId) {
+          upsertUserProfile(userId, { bucket_list_item: item });
+        }
+      },
+      completeFirstTime: () => {
+        set((state) => ({
+          user: { ...state.user, firstTimeComplete: true },
+        }));
+      },
 
       // Onboarding actions
       setOnboardingDream: (dream) =>
@@ -363,10 +442,24 @@ export const useStore = create<AppState>()(
             onboardingData: { ...state.user.onboardingData, pace },
           },
         })),
-      completeOnboarding: () =>
+      completeOnboarding: () => {
+        const state = get();
+        const { dream, blocker, pace } = state.user.onboardingData;
+
+        // Set onboarding complete locally first
         set((state) => ({
           user: { ...state.user, onboardingComplete: true },
-        })),
+        }));
+
+        // Fire-and-forget: Create user in Supabase
+        createSupabaseUser(dream, blocker, pace).then((userId) => {
+          if (userId) {
+            set((state) => ({
+              user: { ...state.user, supabaseUserId: userId },
+            }));
+          }
+        });
+      },
 
       // Dream actions
       addDream: (dream) =>
@@ -398,7 +491,7 @@ export const useStore = create<AppState>()(
           return; // Already have moves for today
         }
 
-        // Generate new moves for today
+        // Generate new moves for today using local fallback
         const newMoves = generateMovesForCategory(category, today);
         set({
           dailyMoves: newMoves,
@@ -407,12 +500,120 @@ export const useStore = create<AppState>()(
         });
       },
 
-      completeDailyMove: (id) => {
+      // Load daily tasks from Supabase, falling back to local if fails
+      loadDailyTasksFromSupabase: async () => {
         const state = get();
         const today = getTodayString();
+        const category = state.user.onboardingData.dream || 'growth';
 
-        set((state) => {
-          const updatedMoves = state.dailyMoves.map((m) =>
+        // Check if we already have moves for today
+        const todayMoves = state.dailyMoves.filter((m) => m.date === today);
+        if (todayMoves.length > 0) {
+          return; // Already have moves for today
+        }
+
+        // Calculate tier based on total moves
+        const tier = Math.floor(state.totalMovesCompleted / 10) + 1;
+
+        try {
+          const supabaseTasks = await fetchDailyTasks(category, tier);
+
+          if (supabaseTasks && supabaseTasks.length >= 3) {
+            // Pick one of each type from Supabase tasks
+            const quickTasks = supabaseTasks.filter((t) => t.move_type === 'quick');
+            const powerTasks = supabaseTasks.filter((t) => t.move_type === 'power');
+            const bossTasks = supabaseTasks.filter((t) => t.move_type === 'boss');
+
+            // Randomly select one from each type (or use first if only one)
+            const getRandomTask = (tasks: SupabaseDailyTask[]) => {
+              if (tasks.length === 0) return null;
+              return tasks[Math.floor(Math.random() * tasks.length)];
+            };
+
+            const quickTask = getRandomTask(quickTasks);
+            const powerTask = getRandomTask(powerTasks);
+            const bossTask = getRandomTask(bossTasks);
+
+            // Only use Supabase tasks if we have at least one of each type
+            if (quickTask && powerTask && bossTask) {
+              const newMoves: DailyMove[] = [
+                {
+                  id: `quick-${today}-${Date.now()}`,
+                  type: 'quick',
+                  title: quickTask.title,
+                  description: quickTask.description || '',
+                  points: 1,
+                  timeEstimate: '2-5 min',
+                  completed: false,
+                  date: today,
+                },
+                {
+                  id: `power-${today}-${Date.now() + 1}`,
+                  type: 'power',
+                  title: powerTask.title,
+                  description: powerTask.description || '',
+                  points: 3,
+                  timeEstimate: '15-30 min',
+                  completed: false,
+                  date: today,
+                },
+                {
+                  id: `boss-${today}-${Date.now() + 2}`,
+                  type: 'boss',
+                  title: bossTask.title,
+                  description: bossTask.description || '',
+                  points: 10,
+                  timeEstimate: 'The scary one',
+                  completed: false,
+                  date: today,
+                },
+              ];
+
+              set({
+                dailyMoves: newMoves,
+                lastDailyMovesDate: today,
+                dailyMovesCompletedToday: 0,
+              });
+              return;
+            }
+          }
+
+          // Fall back to local if Supabase doesn't have enough tasks
+          get().generateDailyMoves();
+        } catch (err) {
+          get().generateDailyMoves();
+        }
+      },
+
+      // Load sponsored challenges from Supabase
+      loadSponsoredChallenges: async () => {
+        try {
+          const challenges = await fetchSponsoredChallenges();
+          const mapped: SponsoredChallenge[] = challenges.map((c) => ({
+            id: c.id,
+            title: c.title,
+            description: c.description,
+            sponsorName: c.sponsor_name,
+            sponsorLogoUrl: c.sponsor_logo_url,
+            category: c.category,
+            moveType: c.move_type,
+            pointsBonus: c.points_bonus,
+            startDate: c.start_date,
+            endDate: c.end_date,
+          }));
+          set({ sponsoredChallenges: mapped });
+        } catch (err) {
+          // Silently fail - sponsored challenges are optional
+        }
+      },
+
+      completeDailyMove: (id, proof) => {
+        const state = get();
+        const today = getTodayString();
+        const move = state.dailyMoves.find((m) => m.id === id);
+
+        set((currentState) => {
+          const updatedMoves = currentState.dailyMoves.map((m) =>
             m.id === id
               ? { ...m, completed: true, completedAt: new Date().toISOString() }
               : m
@@ -422,18 +623,17 @@ export const useStore = create<AppState>()(
             (m) => m.date === today && m.completed
           ).length;
 
-          const move = state.dailyMoves.find((m) => m.id === id);
           const points = move?.points || 0;
 
           return {
             dailyMoves: updatedMoves,
             dailyMovesCompletedToday: completedCount,
-            totalMovesCompleted: state.totalMovesCompleted + 1,
+            totalMovesCompleted: currentState.totalMovesCompleted + 1,
             visionBoard: {
-              ...state.visionBoard,
+              ...currentState.visionBoard,
               filledCells: Math.min(
-                state.visionBoard.totalCells,
-                state.visionBoard.filledCells + 1
+                currentState.visionBoard.totalCells,
+                currentState.visionBoard.filledCells + 1
               ),
             },
           };
@@ -441,6 +641,22 @@ export const useStore = create<AppState>()(
 
         // Check and update streak
         get().checkAndUpdateStreak();
+
+        // Fire-and-forget: Record move to Supabase
+        const userId = get().user.supabaseUserId;
+        if (userId && move) {
+          recordMove(
+            userId,
+            move.type,
+            move.title,
+            move.description,
+            proof?.proofText,
+            proof?.proofPhoto,
+            proof?.aiVerified || false,
+            proof?.aiMessage,
+            move.points
+          );
+        }
       },
 
       getDailyMoves: () => {
@@ -518,24 +734,35 @@ export const useStore = create<AppState>()(
         yesterday.setDate(yesterday.getDate() - 1);
         const yesterdayString = yesterday.toISOString().split('T')[0];
 
+        let newStreakCount: number;
+
         if (lastDate === yesterdayString || lastDate === null) {
           // Continuing or starting streak
-          set((state) => ({
+          newStreakCount = state.streaks.count + 1;
+          set((currentState) => ({
             streaks: {
-              ...state.streaks,
-              count: state.streaks.count + 1,
+              ...currentState.streaks,
+              count: newStreakCount,
               lastDate: new Date().toISOString(),
             },
           }));
         } else {
           // Streak broken, start fresh
-          set((state) => ({
+          newStreakCount = 1;
+          set((currentState) => ({
             streaks: {
-              ...state.streaks,
-              count: 1,
+              ...currentState.streaks,
+              count: newStreakCount,
               lastDate: new Date().toISOString(),
             },
           }));
+        }
+
+        // Fire-and-forget: Update stats in Supabase
+        const userId = get().user.supabaseUserId;
+        const totalMoves = get().totalMovesCompleted;
+        if (userId) {
+          updateUserStats(userId, newStreakCount, totalMoves);
         }
       },
 
@@ -580,6 +807,7 @@ export const useStore = create<AppState>()(
           dailyMovesCompletedToday: 0,
           lastDailyMovesDate: null,
           proofHistory: [],
+          sponsoredChallenges: [],
         }),
     }),
     {

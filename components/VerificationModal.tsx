@@ -32,16 +32,6 @@ interface VerificationModalProps {
 
 const OPENROUTER_API_KEY = process.env.EXPO_PUBLIC_OPENROUTER_API_KEY || '';
 
-// Debug: Log API key status on module load
-console.log('=== OPENROUTER API KEY STATUS ===');
-console.log('API Key loaded:', process.env.EXPO_PUBLIC_OPENROUTER_API_KEY ? 'YES' : 'NO');
-if (!OPENROUTER_API_KEY) {
-  console.log('API Key: undefined/empty - MISSING!');
-} else {
-  console.log('API Key first 10 chars:', OPENROUTER_API_KEY.substring(0, 10) + '...');
-  console.log('API Key length:', OPENROUTER_API_KEY.length);
-}
-
 export const VerificationModal: React.FC<VerificationModalProps> = ({
   visible,
   move,
@@ -146,19 +136,6 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
   };
 
   const verifyWithAI = async (): Promise<{ verified: boolean; message: string }> => {
-    console.log('=== AI VERIFICATION REQUEST ===');
-    console.log('Request URL: https://openrouter.ai/api/v1/chat/completions');
-    console.log('Model: meta-llama/llama-3.1-8b-instruct:free');
-    console.log('Move:', move.title);
-    console.log('User proof:', proofText);
-
-    // Log API key status before making request
-    if (!OPENROUTER_API_KEY) {
-      console.log('WARNING: API Key is undefined/empty!');
-    } else {
-      console.log('API Key (first 10 chars):', OPENROUTER_API_KEY.substring(0, 10) + '...');
-    }
-
     try {
       const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
@@ -181,37 +158,29 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
         }),
       });
 
-      console.log('Response status:', response.status);
-
       const data = await response.json();
-      console.log('=== AI VERIFICATION RESPONSE ===');
-      console.log('Full response:', JSON.stringify(data, null, 2));
 
       if (data.choices && data.choices[0]?.message?.content) {
         const content = data.choices[0].message.content;
-        console.log('AI content:', content);
 
         try {
           // Try to parse JSON from the response
           const jsonMatch = content.match(/\{[\s\S]*\}/);
           if (jsonMatch) {
             const parsed = JSON.parse(jsonMatch[0]);
-            console.log('Parsed result:', parsed);
             return {
               verified: parsed.verified === true,
               message: parsed.message || (parsed.verified ? 'Great work!' : 'Try to be more specific.'),
             };
           }
         } catch (parseError) {
-          console.log('JSON parse error:', parseError);
+          // Fall through to throw
         }
       }
 
       // If we couldn't parse the response, fall back to offline
       throw new Error('Could not parse AI response');
     } catch (error) {
-      console.log('=== AI VERIFICATION ERROR ===');
-      console.log('Error:', error);
       throw error;
     }
   };
@@ -254,7 +223,6 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
         }
       } catch (error) {
         // Network error or API failure - allow offline completion
-        console.log('API failed, allowing offline completion');
         if (hapticEnabled) {
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         }
