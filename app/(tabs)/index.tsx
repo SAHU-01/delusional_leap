@@ -1033,6 +1033,8 @@ const FirstTimeSwipeableCardFan: React.FC<FirstTimeSwipeableCardFanProps> = ({
 
 export default function TodayTab() {
   const confettiRef = useRef<ConfettiCannon>(null);
+  const celebrationConfettiRef = useRef<ConfettiCannon>(null);
+  const celebrationFiredRef = useRef(false);
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [quote, setQuote] = useState(GABBY_QUOTES[0]);
   const [showingPaywall, setShowingPaywall] = useState(false);
@@ -1117,6 +1119,21 @@ export default function TodayTab() {
 
   const incompleteMoves = todayMoves.filter((m) => !m.completed);
   const allCompleted = todayMoves.length > 0 && incompleteMoves.length === 0;
+
+  // Fire celebration haptic and confetti when all moves complete
+  useEffect(() => {
+    if (allCompleted && !celebrationFiredRef.current) {
+      celebrationFiredRef.current = true;
+      if (settings.haptics) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      }
+      // Confetti will auto-start in the celebration view
+    }
+    // Reset the ref when allCompleted becomes false (new day)
+    if (!allCompleted) {
+      celebrationFiredRef.current = false;
+    }
+  }, [allCompleted, settings.haptics]);
 
   // Handle first-time task completion
   const handleFirstTimeTaskComplete = useCallback((taskId: 'name' | 'email' | 'bucketlist') => {
@@ -1246,15 +1263,16 @@ export default function TodayTab() {
 
   // Handle verification complete callback
   const handleVerificationComplete = useCallback((proof: Omit<MoveProof, 'id' | 'completedAt' | 'date'>) => {
-    setShowVerificationModal(false);
-
     if (!moveToVerify) return;
 
-    // Trigger haptic and confetti
+    // Trigger haptic and confetti FIRST (before any state changes)
     if (settings.haptics) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     }
     confettiRef.current?.start();
+
+    // Close modal AFTER confetti starts
+    setShowVerificationModal(false);
 
     const newCompletedCount = todayCompletedCount + 1;
     const moveId = moveToVerify.id;
@@ -1397,6 +1415,7 @@ export default function TodayTab() {
 
   // If all completed, show ONLY celebration view (no header, no streak banner)
   // BUT still render CustomPaywall so it can appear on top after 3rd move!
+  // Haptic fires via useEffect above, confetti auto-starts below
   if (allCompleted) {
     return (
       <GestureHandlerRootView style={styles.container}>
@@ -1416,6 +1435,19 @@ export default function TodayTab() {
             hapticEnabled={settings.haptics}
           />
         </SafeAreaView>
+
+        {/* Confetti at ROOT level - fires when all moves complete */}
+        <View style={styles.confettiContainer} pointerEvents="none">
+          <ConfettiCannon
+            count={200}
+            origin={{ x: width / 2, y: -20 }}
+            autoStart={true}
+            fadeOut={true}
+            explosionSpeed={400}
+            fallSpeed={3000}
+            colors={[Colors.hibiscus, Colors.sunset, Colors.amber, Colors.skyTeal, '#fff']}
+          />
+        </View>
       </GestureHandlerRootView>
     );
   }
